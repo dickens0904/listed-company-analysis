@@ -236,6 +236,8 @@ def _infer_source_from_dim(dim, result):
         return 'cninfo_pdf'
     elif dim == 'hk_financial':
         return 'akshare_hk_fin'
+    elif dim == 'cross_validation':
+        return 'em_api'
 
     return None
 
@@ -252,6 +254,7 @@ def dim_label(dim):
         'governance': '公司治理', 'share_history': '股本融资历史',
         'institutional': '机构持仓', 'earnings_forecast': '盈利预测',
         'investor_qa': '投资者互动', 'hkex_announcements': '港交所公告',
+        'cross_validation': '隐情交叉验证',
     }
     return labels.get(dim, dim)
 
@@ -279,6 +282,7 @@ def dim_summary(dim, result):
         'annual_pdf': f"年报: {result.get('year','?')}年 | {result.get('page_count',0)}页" if result and not result.get('error') else "年报: 获取失败",
         'periodic_reports': f"定期报告: 已下载{result.get('summary',{}).get('total_downloaded',0)}份" if result and not result.get('error') else "定期报告: 获取失败",
         'hk_financial': f"财务数据: {result.get('profile',{}).get('company_name_cn','?')} | 营收 {result.get('valuation',{}).get('revenue','?')}",
+        'cross_validation': f"隐情 {len(result.get('findings',[]))} 条 | 综合风险评分: {result.get('overall_risk_score','?')}/100",
         'peer_compare': f"同业公司: {result.get('peer_count',0)}家 | 对比结论: {result.get('conclusion','N/A')}",
         'rd_analysis': f"主因: {result.get('profit_decomposition',{}).get('primary_cause','未知')} | 研发: {result.get('rd_quality',{}).get('rd_expense_亿','N/A')}亿元(资本化{result.get('rd_quality',{}).get('capitalization_rate','N/A')}%) | {result.get('rd_vs_loss_summary','N/A')}",
         'quote': '行情维度',
