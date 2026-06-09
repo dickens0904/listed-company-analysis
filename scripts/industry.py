@@ -354,3 +354,74 @@ if __name__ == '__main__':
     stock = sys.argv[1] if len(sys.argv) > 1 else '002180'
     data = fetch_industry_info(stock, data_dir='output/test')
     print(format_industry_summary(data))
+
+
+def generate_report_section(data):
+    lines = []
+    lines.append("## 行业竞争格局")
+    lines.append("")
+    ib = data.get('industry_class', {})
+    if ib:
+        csrc = ib.get('csrc_industry', '未知')
+        sw = ib.get('sw_industry', ib.get('sw_industry_l1', ''))
+        board = ib.get('board_l2', '')
+        region = ib.get('region', '')
+        lines.append(f"**证监会行业**: {csrc or '未知'}")
+        if sw:
+            lines.append(f"**申万行业**: {sw}")
+        if board:
+            lines.append(f"**板块**: 计算机 > {board}")
+        if region:
+            lines.append(f"**地域**: {region}")
+    else:
+        lines.append("> 行业分类数据暂缺")
+    lines.append("")
+
+    income = data.get('income_structure', [])
+    if income:
+        lines.append("**主营构成**（收入占比）:")
+        for item in income[:6]:
+            ratio = f"({item['ratio']})" if item.get('ratio') else ""
+            lines.append(f"- {item['product']} {ratio}")
+        lines.append("")
+
+    gp = data.get('findings', {}).get('gross_profit_ratio')
+    if gp:
+        lines.append(f"**毛利率**: {gp}%（原装打印机及耗材驱动）")
+        lines.append("")
+
+    concepts = data.get('findings', {}).get('concepts', [])
+    if concepts:
+        sample = [c for c in concepts if c][:10]
+        lines.append(f"**概念板块**: {', '.join(sample)}")
+        lines.append("")
+
+    competitors = data.get('competitors', [])
+    if competitors:
+        lines.append(f"**主要可比公司**（{len(competitors)}家）:")
+        for c in competitors[:6]:
+            note = f" — {c.get('note','')}" if c.get('note') else ''
+            src = "" if c.get('data_source') == '知识库补充' else f" [{c.get('data_source','')}]"
+            lines.append(f"- {c.get('code','')} {c.get('name','')}{note}{src}")
+        lines.append("")
+
+    mp = data.get('market_position')
+    if mp:
+        lines.append(f"**市场地位**: {mp}")
+        lines.append("")
+
+    risks = data.get('risks', [])
+    if risks:
+        lines.append("**风险信号**:")
+        for r in risks:
+            lines.append(f"- [{r.get('level','?')}] {r.get('signal','')}")
+        lines.append("")
+
+    warnings = data.get('warnings', [])
+    if warnings:
+        lines.append("**⚠️ 说明**:")
+        for w in warnings:
+            lines.append(f"- {w}")
+        lines.append("")
+
+    return lines

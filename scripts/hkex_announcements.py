@@ -262,3 +262,46 @@ if __name__ == '__main__':
         print(f"\n{i+1}. [{r['doc_type']}] {r['date']}")
         print(f"   {r['title']}")
         print(f"   {r['pdf_url'][:80]}...")
+
+
+def generate_report_section(data: list) -> list:
+    lines = []
+    if not data or not isinstance(data, list) or len(data) == 0:
+        lines.append("## 港交所公告")
+        lines.append("")
+        lines.append("未获取到港交所公告数据。")
+        lines.append("")
+        return lines
+
+    lines.append("## 港交所公告")
+    lines.append("")
+    lines.append(f"共获取 **{len(data)}** 条港交所公告。")
+    lines.append("")
+
+    type_groups = {}
+    for ann in data:
+        dt = ann.get('doc_type', '其他公告')
+        if dt not in type_groups:
+            type_groups[dt] = []
+        type_groups[dt].append(ann)
+
+    lines.append("### 公告类型分布")
+    lines.append("")
+    for dtype, anns in sorted(type_groups.items(), key=lambda x: -len(x[1])):
+        lines.append(f"- **{dtype}**: {len(anns)}条")
+    lines.append("")
+
+    lines.append("### 公告明细")
+    lines.append("")
+    for i, ann in enumerate(data[:20]):
+        title = ann.get('title', '')
+        date = ann.get('date', '')
+        dtype = ann.get('doc_type', '')
+        pdf_url = ann.get('pdf_url', '')
+
+        lines.append(f"{i+1}. **[{dtype}]** {date} — {title}")
+        if pdf_url and not pdf_url.startswith('javascript:'):
+            lines.append(f"   📎 [PDF]({pdf_url})")
+    lines.append("")
+
+    return lines

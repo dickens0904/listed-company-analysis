@@ -337,3 +337,73 @@ if __name__ == '__main__':
     print('Warnings:', result.get('warnings'))
     print('Highlights:', result.get('highlights'))
     print('Summary:', analysis.get('summary', ''))
+
+
+def generate_report_section(data: dict) -> list:
+    lines = []
+    lines.append("## 财务报表分析（港股）")
+    lines.append("")
+
+    profile = data.get('profile', {})
+    if profile:
+        lines.append(f"**公司**: {profile.get('company_name_cn', '未知')} ({profile.get('industry', '')})")
+        lines.append(f"**董事长**: {profile.get('chairman', '未知')} | **核数师**: {profile.get('auditor', '未知')}")
+        lines.append(f"**员工**: {profile.get('employees', '未知')}人 | **注册地**: {profile.get('registered_place', '未知')}")
+        lines.append("")
+
+    valuation = data.get('valuation', {})
+    if valuation:
+        pe = valuation.get('pe_ttm')
+        pb = valuation.get('pb')
+        mc = valuation.get('market_cap')
+        dy = valuation.get('dividend_yield')
+        lines.append("**估值指标**:")
+        lines.append(f"- 市值: {mc:,.0f} HKD" if mc else "- 市值: 未知")
+        lines.append(f"- PE: {pe:.1f}x (亏损)" if pe and pe < 0 else f"- PE: {pe:.1f}x" if pe else "- PE: 未知")
+        lines.append(f"- PB: {pb:.2f}x" if pb else "- PB: 未知")
+        lines.append(f"- 股息率: {dy:.2f}%" if dy else "- 股息率: 未知")
+        lines.append("")
+
+    indicators = data.get('indicators', [])
+    if indicators:
+        lat = indicators[0]
+        lines.append("**财务指标（最新一期）**:")
+        lines.append(f"- 报告期: {lat.get('date', '未知')} | 币种: {lat.get('currency', 'HKD')}")
+        lines.append(f"- 营收: {lat.get('operate_income'):,.0f} HKD (同比: {lat.get('income_yoy'):+.1f}%)" if lat.get('operate_income') else "- 营收: 未知")
+        lines.append(f"- 毛利: {lat.get('gross_profit'):,.0f} HKD | 毛利率: {lat.get('gross_margin'):.1f}%" if lat.get('gross_margin') else "- 毛利: 未知")
+        lines.append(f"- 归母净利润: {lat.get('holder_profit'):,.0f} HKD" if lat.get('holder_profit') else "- 归母净利润: 未知")
+        lines.append(f"- ROE: {lat.get('roe'):.1f}%" if lat.get('roe') else "- ROE: 未知")
+        lines.append(f"- 资产负债率: {lat.get('debt_asset_ratio'):.1f}%" if lat.get('debt_asset_ratio') else "- 资产负债率: 未知")
+        lines.append("")
+
+        if len(indicators) > 1:
+            show_count = len(indicators)
+            lines.append(f"**近{show_count}年财务趋势**:")
+            lines.append("| 报告期 | 营收(HKD) | 同比 | 毛利率 | 归母净利润 | ROE | 资产负债率 |")
+            lines.append("|--------|-----------|------|--------|-----------|-----|----------|")
+            for r in indicators:
+                oi = f"{r.get('operate_income',0)/1e8:,.0f}亿" if r.get('operate_income') else "N/A"
+                yoy = f"{r.get('income_yoy',0):+.1f}%" if r.get('income_yoy') is not None else "N/A"
+                gm = f"{r.get('gross_margin',0):.1f}%" if r.get('gross_margin') else "N/A"
+                hp = f"{r.get('holder_profit',0)/1e8:,.0f}亿" if r.get('holder_profit') else "N/A"
+                roe = f"{r.get('roe',0):.1f}%" if r.get('roe') else "N/A"
+                dar = f"{r.get('debt_asset_ratio',0):.1f}%" if r.get('debt_asset_ratio') else "N/A"
+                lines.append(f"| {r.get('date','?')} | {oi} | {yoy} | {gm} | {hp} | {roe} | {dar} |")
+            lines.append("")
+
+    dividend = data.get('dividend', [])
+    if dividend:
+        lines.append("**分红历史**:")
+        for d in dividend[:4]:
+            lines.append(f"- {d.get('fiscal_year','?')} | {d.get('plan','?')} | 除净日: {d.get('ex_date','?')}")
+        lines.append("")
+
+    analysis = data.get('analysis', {})
+    warnings = analysis.get('warnings', []) or data.get('warnings', [])
+    if warnings:
+        lines.append("**⚠️ 风险信号**:")
+        for w in warnings:
+            lines.append(f"- {w}")
+        lines.append("")
+
+    return lines

@@ -645,3 +645,13 @@ if __name__ == '__main__':
     print(json.dumps(result, ensure_ascii=False, indent=2))
     print("\n" + "="*60 + "\n")
     print(format_forecast_markdown(result, '600519'))
+
+
+def generate_report_section(data: dict) -> list:
+    if not data:
+        return []
+    stock_code = data.get('_meta', {}).get('stock_code', '')
+    md = format_forecast_markdown(data, stock_code)
+    if md.startswith("## "):
+        md = md.split('\n', 1)[1]
+    return ["\n## 盈利预测\n\n", md]

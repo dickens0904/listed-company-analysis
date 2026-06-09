@@ -74,6 +74,20 @@ class AnnualReportExtractor:
             'max_chars': 3000,
             'description': '每股派息/分红率/送转股'
         },
+        'financial_key_data': {
+            'name': '主要会计数据',
+            'starts': ['主要会计数据', '本报告期主要会计数据'],
+            'ends': ['主要财务指标', '本报告期主要财务指标', '非经常性损益'],
+            'max_chars': 8000,
+            'description': '营收/净利/扣非净利/现金流/ROE/资产负债率等关键数据'
+        },
+        'balance_sheet_key': {
+            'name': '资产负债表关键数据',
+            'starts': ['资产负债表'],
+            'ends': ['利润表', '现金流量表', '所有者权益变动表'],
+            'max_chars': 5000,
+            'description': '总资产/总负债/资产负债率'
+        },
         'top5_customers': {
             'name': '前五名客户',
             'starts': ['前五名客户销售额'],
@@ -667,6 +681,99 @@ class AnnualReportExtractor:
             results.append(f"...{snippet}...")
         
         return results
+    
+    def extract_financial_metrics(self):
+        """
+        从年报PDF提取关键财务指标
+        提取：扣非净利润、资产负债率、营收、净利等
+        
+        Returns:
+            dict: {'扣非净利润': 'xx亿元', '资产负债率': 'xx%', ...}
+        """
+        metrics = {}
+        
+        # 提取扣非净利润（扣除非经常性损益的净利润）
+        deduct_patterns = [
+            r'扣除非经常性损益[的]?净利润[^\d]*([\d,.]+)\s*[亿万元]',
+            r'归属于上市公司股东的扣除非经常性损益的净利润[^\d]*([\d,.]+)\s*[亿万元]',
+            r'扣非净利润[^\d]*([\d,.]+)\s*[亿万元]',
+            r'扣除非经常性损益后的净利润[^\d]*([\d,.]+)\s*[亿万元]',
+        ]
+        for pat in deduct_patterns:
+            m = re.search(pat, self.text)
+            if m:
+                metrics['扣非净利润'] = m.group(1)
+                break
+        
+        # 提取资产负债率
+        debt_ratio_patterns = [
+            r'资产负债率[^\d]*([\d,.]+)\s*%',
+            r'负债率为[^\d]*([\d,.]+)\s*%',
+            r'资产负债比率[^\d]*([\d,.]+)\s*%',
+        ]
+        for pat in debt_ratio_patterns:
+            m = re.search(pat, self.text)
+            if m:
+                metrics['资产负债率'] = m.group(1) + '%'
+                break
+        
+        # 提取营业收入
+        revenue_patterns = [
+            r'营业收入[^\d]*([\d,.]+)\s*[亿万元]',
+            r'营业总收入[^\d]*([\d,.]+)\s*[亿万元]',
+        ]
+        for pat in revenue_patterns:
+            m = re.search(pat, self.text)
+            if m:
+                metrics['营业收入'] = m.group(1)
+                break
+        
+        # 提取净利润
+        net_profit_patterns = [
+            r'归属于上市公司股东的净利润[^\d]*([\d,.]+)\s*[亿万元]',
+            r'净利润[^\d]*([\d,.]+)\s*[亿万元]',
+        ]
+        for pat in net_profit_patterns:
+            m = re.search(pat, self.text)
+            if m:
+                metrics['净利润'] = m.group(1)
+                break
+        
+        # 提取总资产
+        assets_patterns = [
+            r'资产总计[^\d]*([\d,.]+)\s*[亿万元]',
+            r'总资产[^\d]*([\d,.]+)\s*[亿万元]',
+        ]
+        for pat in assets_patterns:
+            m = re.search(pat, self.text)
+            if m:
+                metrics['总资产'] = m.group(1)
+                break
+        
+        # 提取总负债
+        liabilities_patterns = [
+            r'负债合计[^\d]*([\d,.]+)\s*[亿万元]',
+            r'总负债[^\d]*([\d,.]+)\s*[亿万元]',
+        ]
+        for pat in liabilities_patterns:
+            m = re.search(pat, self.text)
+            if m:
+                metrics['总负债'] = m.group(1)
+                break
+        
+        # 提取加权ROE
+        roe_patterns = [
+            r'加权平均净资产收益率[^\d]*([\d,.]+)\s*%',
+            r'加权净资产收益率[^\d]*([\d,.]+)\s*%',
+            r'净资产收益率[^\d]*([\d,.]+)\s*%',
+        ]
+        for pat in roe_patterns:
+            m = re.search(pat, self.text)
+            if m:
+                metrics['加权ROE'] = m.group(1) + '%'
+                break
+        
+        return metrics
     
     def extract_all(self):
         """提取所有20个章节"""

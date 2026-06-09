@@ -375,3 +375,48 @@ if __name__ == '__main__':
     print(f"辅导期数: {result['report_count']}")
     for s in result['subsidiaries']:
         print(f"  {s['date']} | {s['sub_company']} | 目标:{s['target_board']}")
+
+
+def generate_report_section(data: dict) -> list:
+    lines = []
+    lines.append("## 子公司分拆/IPO追踪")
+    lines.append("")
+
+    subs = data.get('subsidiaries', [])
+    csrc = data.get('csrc_tutoring', [])
+    report_count = data.get('report_count', '未知')
+    tutoring_total = data.get('tutoring_total', 0)
+
+    if subs:
+        lines.append("**分拆上市公告**:")
+        for s in subs:
+            lines.append(f"- **{s.get('date','')}** {s.get('title','')[:90]}")
+            lines.append(f"  - 子公司: {s.get('sub_company','未知')} | 目标板块: {s.get('target_board','未知')}")
+        lines.append("")
+
+    if csrc and len(csrc) > 0:
+        lines.append(f"**证监会辅导备案**（共{tutoring_total}条，当前{report_count}）:")
+        for item in csrc[:5]:
+            name = item.get('company_name', '')
+            status = item.get('status', '')
+            rtype = item.get('report_type', '')
+            org = item.get('tutor_org', '')
+            date = item.get('filing_date', '')[:10]
+            lines.append(f"- {date} | {name} | {status} | {rtype} | 辅导机构:{org}")
+        if len(csrc) > 5:
+            lines.append(f"  - ...还有{len(csrc)-5}条")
+        lines.append("")
+
+    findings = data.get('findings', [])
+    if findings:
+        lines.append("**IPO进度评估**:")
+        for f in findings:
+            level_icon = {'high': '🔴', 'medium': '🟡', 'info': '🟢'}.get(f.get('level',''), '⚪')
+            lines.append(f"- {level_icon} {f.get('text','')}")
+        lines.append("")
+
+    if not subs and not csrc:
+        lines.append("> 近12个月公告中未找到分拆上市相关公告，AKShare辅导数据中也未找到相关记录。")
+        lines.append("")
+
+    return lines

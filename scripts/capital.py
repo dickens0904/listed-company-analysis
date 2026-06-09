@@ -117,3 +117,113 @@ if __name__ == '__main__':
     print(f"资金动作: {result['count']}项")
     for a in result['actions'][:10]:
         print(f"  {a['date']} [{a['type']}] {a['title'][:60]}")
+
+
+def _generate_capital_ai_narrative(data):
+    """生成资金动作AI综合解读"""
+    actions = data.get('actions', [])
+    if not actions:
+        return ""
+
+    evidence_parts = []
+    evidence_parts.append(f"资金动作总数: {data.get('count', 0)}项")
+
+    type_counts = {}
+    for a in actions:
+        t = a.get('type', '其他')
+        type_counts[t] = type_counts.get(t, 0) + 1
+    evidence_parts.append(f"动作类型分布: {type_counts}")
+
+    risk_actions = [a for a in actions if a.get('risk_signal')]
+    if risk_actions:
+        evidence_parts.append(f"风险信号动作: {len(risk_actions)}项")
+        for a in risk_actions[:5]:
+            evidence_parts.append(f"  {a.get('date', '')[:10]} [{a.get('type', '')}] {a.get('risk_signal', '')}")
+
+    for a in actions[:10]:
+        evidence_parts.append(f"{a.get('date', '')[:10]} [{a.get('type', '')}] {a.get('title', '')[:60]}")
+
+    evidence_block = '\n'.join(evidence_parts)
+
+    prompt = f"""以下是某上市公司资金动作数据，请写一段专业的资金动作分析（200-400字）。
+
+要求：
+1. 分析资金动作类型分布（回购/增持/减持/质押等）
+2. 评估资金动作的意图和影响
+3. 关注风险信号（减持、质押、募资变更等）
+4. 分析资金动作频率和趋势
+5. 语言专业、客观
+
+===== 资金数据 =====
+{evidence_block}
+===== 数据结束 =====
+
+请输出资金动作分析："""
+
+    try:
+        from scripts.llm_config import call_llm
+        narrative = call_llm(
+            system_prompt="你是一位顶级券商资金分析师，擅长解读上市公司资金动作背后的意图和风险。",
+            user_prompt=prompt,
+            max_tokens=2048,
+        )
+        if narrative and len(narrative) > 100:
+            return narrative
+    except Exception as e:
+        print(f"  [资金AI解读] LLM调用失败: {e}")
+
+    return ""
+
+
+def build_evidence(data, findings=None):
+    """构建资金动作证据块"""
+    actions = data.get('actions', [])
+    if not actions:
+        return ""
+    parts = [f"资金动作总数: {data.get('count', 0)}项"]
+    type_counts = {}
+    for a in actions:
+        t = a.get('type', '其他')
+        type_counts[t] = type_counts.get(t, 0) + 1
+    parts.append(f"动作类型分布: {type_counts}")
+    risk_actions = [a for a in actions if a.get('risk_signal')]
+    if risk_actions:
+        parts.append(f"风险信号动作: {len(risk_actions)}项")
+        for a in risk_actions[:5]:
+            parts.append(f"  {a.get('date', '')[:10]} [{a.get('type', '')}] {a.get('risk_signal', '')}")
+    for a in actions[:10]:
+        parts.append(f"{a.get('date', '')[:10]} [{a.get('type', '')}] {a.get('title', '')[:60]}")
+    return '\n'.join(parts)
+
+
+def generate_report_section(data, batch_analysis=None):
+    lines = []
+    lines.append("## 资金动作分析")
+    lines.append("")
+    lines.append(f"**资金动作总数**: {data.get('count', 0)}项")
+    lines.append("")
+
+    ai_narrative = ""
+    if batch_analysis and batch_analysis.get('capital'):
+        ai_narrative = batch_analysis['capital']
+    else:
+        ai_narrative = _generate_capital_ai_narrative(data)
+
+    if ai_narrative:
+        lines.append("### 🤖 AI资金动作分析")
+        lines.append("")
+        lines.append(ai_narrative)
+        lines.append("")
+
+    actions = data.get('actions', [])
+    if actions:
+        lines.append("### 动作明细")
+        lines.append("")
+        lines.append('<table class="capital-table"><thead><tr><th>日期</th><th>类型</th><th>详情</th><th>风险信号</th></tr></thead><tbody>')
+        for a in actions[:20]:
+            risk = a.get('risk_signal', '')
+            lines.append(f'<tr><td>{a.get("date","")[:10]}</td><td>{a.get("type","")}</td><td>{a.get("title","")[:50]}</td><td>{risk}</td></tr>')
+        lines.append('</tbody></table>')
+        lines.append("")
+
+    return lines

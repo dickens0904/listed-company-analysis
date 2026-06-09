@@ -394,13 +394,24 @@ class PeerComparator:
         pe_pct = r.get('pe')
         pb_pct = r.get('pb')
 
-        if pe_val and pb_val:
-            pe_judge = '高估' if pe_pct and pe_pct > 70 else ('低估' if pe_pct and pe_pct < 30 else '合理')
-            pb_judge = '高估' if pb_pct and pb_pct > 70 else ('低估' if pb_pct and pb_pct < 30 else '合理')
-            lines.append(f"- **PE({pe_val:.1f}x)**: 行业分位{pct_bar(pe_pct)} → {pe_judge}")
-            lines.append(f"- **PB({pb_val:.2f}x)**: 行业分位{pct_bar(pb_pct)} → {pb_judge}")
-        elif pe_val:
-            lines.append(f"- **PE({pe_val:.1f}x)**: 行业均值{s.get('pe',{}).get('mean','N/A')}x，{vs(pe_val, s.get('pe',{}).get('mean'), lower_better=True)}")
+        if pe_val is not None and pb_val is not None:
+            if pe_val < 0:
+                lines.append(f"- **PE({pe_val:.1f}x)**: 🔴 公司亏损，PE无意义")
+                if pb_val > 0:
+                    pb_judge = '高估' if pb_pct and pb_pct > 70 else ('低估' if pb_pct and pb_pct < 30 else '合理')
+                    lines.append(f"- **PB({pb_val:.2f}x)**: 行业分位{pct_bar(pb_pct)} → {pb_judge}")
+            else:
+                pe_judge = '高估' if pe_pct and pe_pct > 70 else ('低估' if pe_pct and pe_pct < 30 else '合理')
+                pb_judge = '高估' if pb_pct and pb_pct > 70 else ('低估' if pb_pct and pb_pct < 30 else '合理')
+                lines.append(f"- **PE({pe_val:.1f}x)**: 行业分位{pct_bar(pe_pct)} → {pe_judge}")
+                lines.append(f"- **PB({pb_val:.2f}x)**: 行业分位{pct_bar(pb_pct)} → {pb_judge}")
+        elif pe_val is not None:
+            if pe_val < 0:
+                lines.append(f"- **PE({pe_val:.1f}x)**: 🔴 公司亏损，PE无意义")
+            else:
+                lines.append(f"- **PE({pe_val:.1f}x)**: 行业均值{s.get('pe',{}).get('mean','N/A')}x，{vs(pe_val, s.get('pe',{}).get('mean'), lower_better=True)}")
+        elif pb_val is not None:
+            lines.append(f"- **PB({pb_val:.2f}x)**: 行业均值{s.get('pb',{}).get('mean','N/A')}x，{vs(pb_val, s.get('pb',{}).get('mean'), lower_better=True)}")
         else:
             lines.append("- **PE/PB**: 暂无数据")
 
@@ -469,3 +480,14 @@ if __name__ == '__main__':
     comp = PeerComparator()
     data = comp.compare(args.stock, data_dir=args.output)
     print(comp.format_markdown(data))
+
+
+def generate_report_section(data: dict) -> list:
+    if not data or not data.get('has_data'):
+        return []
+    md = data.get('markdown', '')
+    if not md:
+        return []
+    if md.startswith("## "):
+        md = md.split('\n', 1)[1]
+    return ["\n## 同业财务对比\n\n", md]

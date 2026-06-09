@@ -67,6 +67,7 @@ SOURCE_LABELS = {
     'hkex':                '🌐 港交所披露易',
     'sec_edgar':           '🌐 SEC EDGAR',
     'yfinance':            '🌐 Yahoo Finance',
+    'iwencai':             '🌐 iwencai问财API',
     'annual_pdf_text':     '📄 年报PDF文本提取',
     'manual':              '✍️ 手动输入',
     'all_failed':          '❌ 全部失败',

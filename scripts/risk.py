@@ -26,14 +26,21 @@ def assess_risk(findings):
 
     # 1. 审计意见风险
     audit = findings.get('financial', {}).get('audit_opinion') or '未知'
-    if '非标准' in audit or '保留' in audit or '无法表示' in audit:
+    # 精确匹配：保留意见 / 无法表示意见 / 否定意见（含推断标记时仍匹配核心词）
+    # 注意："无保留意见"以"保留意见"结尾，会被误判；需先检查"无保留意见"
+    has_unreserved = '无保留意见' in audit  # 标准无保留 或 带强调事项段的无保留
+    has_reserved = '保留意见' in audit and not has_unreserved  # 排除"无保留"
+    has_adverse = '无法表示意见' in audit or '否定意见' in audit
+    is_reserved = has_reserved or has_adverse
+    is_empha = '强调事项' in audit and has_unreserved  # 无保留意见+强调事项
+    if is_reserved:
         score += RISK_WEIGHTS['audit']
         signals.append({'dim': '审计意见', 'level': '🔴 高',
                          'detail': f'审计意见：{audit}'})
-    elif '强调事项' in audit:
+    elif is_empha:
         score += RISK_WEIGHTS['audit'] // 2
         signals.append({'dim': '审计意见', 'level': '🟡 中',
-                         'detail': f'带强调事项段：{audit}'})
+                         'detail': f'审计意见：{audit}'})
 
     # 2. 重大诉讼风险
     anns = findings.get('announcements', {}).get('key_events', [])
@@ -144,3 +151,35 @@ if __name__ == '__main__':
     print(f"风险评分: {result['score']}/100 | {result['level']}")
     for s in result['signals']:
         print(f"  {s['level']} [{s['dim']}] {s['detail']}")
+
+
+def generate_report_section(data: dict) -> list:
+    lines = []
+    lines.append("## 综合风险评级")
+    lines.append("")
+    lines.append(f"**风险得分**: {data.get('score', 0)}/100")
+    lines.append("")
+    lines.append(f"**风险等级**: {data.get('level', '未知')}")
+    lines.append("")
+
+    signals = data.get('signals', [])
+    if signals:
+        lines.append("**风险信号明细**:")
+        for s in signals:
+            lines.append(f"- {s.get('level','')} **[{s.get('dim','')}]** {s.get('detail','')}")
+        lines.append("")
+
+    high = data.get('summary', {}).get('high_risk', [])
+    medium = data.get('summary', {}).get('medium_risk', [])
+    if high:
+        lines.append(f"**🔴 高风险信号 ({len(high)}项)**:")
+        for s in high:
+            lines.append(f"- {s['detail']}")
+        lines.append("")
+    if medium:
+        lines.append(f"**🟡 中风险信号 ({len(medium)}项)**:")
+        for s in medium:
+            lines.append(f"- {s['detail']}")
+        lines.append("")
+
+    return lines

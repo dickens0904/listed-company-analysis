@@ -8,7 +8,7 @@ import sys, os, re, json, time, urllib.parse
 from datetime import datetime
 sys.stdout.reconfigure(encoding='utf-8')
 
-from safe_request import safe_get, safe_post
+from scripts.safe_request import safe_get, safe_post
 
 # ─────────────────────────────────────────────
 # 辅助函数

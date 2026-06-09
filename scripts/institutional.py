@@ -280,3 +280,12 @@ if __name__ == "__main__":
     stock = sys.argv[1] if len(sys.argv) > 1 else "600519"
     data = fetch_institutional(stock, data_dir="output/test")
     print(format_markdown(data))
+
+
+def generate_report_section(data: dict) -> list:
+    if not data:
+        return []
+    md = format_markdown(data)
+    if md.startswith("## "):
+        md = md.split('\n', 1)[1]
+    return ["\n## 机构持仓分析\n\n", md]

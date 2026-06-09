@@ -313,12 +313,50 @@ def _get_audit_opinion(stock_code, data_dir, eps, roe):
     """获取审计意见：优先从年报PDF提取，否则从财务数据推断
     
     优先级：
-    1. 年报PDF已下载且有sections → 从audit章节提取
-    2. 年报PDF已下载且有全文 → 正则搜索
-    3. 无PDF → 从EPS/ROE推断（标注"推断"）
+    1. 年报PDF已下载 → 从PDF前10页提取（覆盖PyMuPDF换行问题）
+    2. 年报PDF已下载且有sections → 从audit章节提取（兜底）
+    3. 年报PDF已下载且有全文 → 正则搜索annual_report_text.txt
+    4. 无PDF → 从EPS/ROE推断（标注"推断"）
+    
+    核心修复：sections["audit"]通常只含"审计意见 □是䯒否"勾选框，
+    不是真正的审计意见正文。真正的意见在年报第2页（董事长致辞）。
     """
-    # 尝试从年报PDF sections提取
+    import fitz  # PyMuPDF
+    
+    def _extract_from_pdf(pdf_path):
+        """从PDF前20页提取审计意见（覆盖PyMuPDF换行问题）"""
+        try:
+            if not os.path.exists(pdf_path):
+                return None
+            doc = fitz.open(pdf_path)
+            # 审计意见通常在年报前10页，第2页（董事长致辞）必有
+            front_text = ''
+            for i in range(min(20, len(doc))):
+                front_text += doc[i].get_text('text') + '\n'
+            doc.close()
+            opinion = _parse_audit_from_text(front_text)
+            if opinion:
+                return opinion
+            # 备选：搜索全文前200页（用于超长年报）
+            doc = fitz.open(pdf_path)
+            full_text = ''
+            for i in range(min(200, len(doc))):
+                full_text += doc[i].get_text('text') + '\n'
+            doc.close()
+            return _parse_audit_from_text(full_text)
+        except Exception:
+            return None
+    
     if data_dir:
+        # === 优先级1：直接从PDF提取（最可靠，覆盖第2页董事长致辞）===
+        for pdf_name in ['2025_annual_report.pdf', 'annual_report.pdf',
+                          '2024_annual_report.pdf', '2023_annual_report.pdf']:
+            pdf_path = os.path.join(data_dir, pdf_name)
+            opinion = _extract_from_pdf(pdf_path)
+            if opinion:
+                return opinion
+        
+        # === 优先级2：从sections提取（兜底，但sections["audit"]常为空）===
         sections_path = os.path.join(data_dir, 'annual_report_sections.json')
         if os.path.exists(sections_path):
             try:
@@ -331,14 +369,13 @@ def _get_audit_opinion(stock_code, data_dir, eps, roe):
                     content = str(audit_section)
                 
                 if content and not content.startswith('[未找到'):
-                    # 从审计意见章节提取关键词
                     opinion = _parse_audit_from_text(content)
                     if opinion:
                         return opinion
             except:
                 pass
         
-        # 尝试从全文提取
+        # === 优先级3：从annual_report_text.txt提取（覆盖提前创建的场景）===
         text_path = os.path.join(data_dir, 'annual_report_text.txt')
         if os.path.exists(text_path):
             try:
@@ -355,18 +392,58 @@ def _get_audit_opinion(stock_code, data_dir, eps, roe):
 
 
 def _parse_audit_from_text(text):
-    """从文本中提取审计意见类型"""
-    # 审计意见类型关键词（按严重程度排序，匹配最严重的）
-    opinion_patterns = [
+    """从文本中提取审计意见类型
+
+    ⚠️ PyMuPDF提取时，同一行文本可能被拆分成"无<换行>保留意见"的形式。
+    解决方案：从"出具了"段落到"审计报告"之间的内容匹配（可跨行）。
+    """
+    # 1. 优先：从"出具了"段落到"审计报告"之间的内容匹配（覆盖PyMuPDF跨行情况）
+    chu_pattern = re.compile(r'出具了[^\n]{0,200}审计报告', re.DOTALL)
+    for m in chu_pattern.finditer(text[:50000]):
+        chunk = m.group()
+        if re.search(r'否定意见', chunk):
+            return '否定意见'
+        if re.search(r'无法表示意见', chunk):
+            return '无法表示意见'
+
+        # 用capture group区分具体类型
+        # 方案1: "出具了" + 限定词(强调事项段/持续经营不确定性) + 的 + 无保留意见
+        qual_m = re.search(
+            r'出具了(带(?:强调事项段|持续经营不确定性段落)的?的?(无保留意见))',
+            chunk, re.DOTALL
+        )
+        if qual_m:
+            qualifier = qual_m.group(1)  # e.g. "带强调事项段的" or "带持续经营不确定性段落的"
+            if '强调事项段' in qualifier:
+                return '带强调事项段的无保留意见'
+            elif '持续经营' in qualifier:
+                return '带持续经营不确定性段落的无保留意见'
+            return '无保留意见'  # 其他
+
+        # 方案2: 标准无保留意见
+        if re.search(r'标准无保留意见', chunk):
+            return '标准无保留意见'
+
+        # 方案3: 裸"无保留意见"前有"出具了"但没有特定限定词
+        if re.search(r'出具了(?!.*?(强调事项段|持续经营|标准))', chunk, re.DOTALL):
+            if re.search(r'无\s*保留意见', chunk, re.DOTALL):
+                return '带强调事项段的无保留意见'  # 默认
+
+    # 2. 备选：直接在整个文本中搜索（用于处理非"出具了"格式的情况）
+    search_text = text[:30000]
+    for kw, label in [
         (r'否定意见', '否定意见'),
         (r'无法表示意见', '无法表示意见'),
-        (r'带强调事项段的无保留意见|带持续经营不确定性段落的无保留意见|与持续经营相关的重大不确定性', '带强调事项段的无保留意见'),
+        # 跨行版："无"和"保留意见"之间允许换行
+        (r'带强调事项段的\s*无\s*保留意见', '带强调事项段的无保留意见'),
+        (r'带持续经营不确定性段落的无保留意见', '带持续经营不确定性段落的无保留意见'),
         (r'标准无保留意见', '标准无保留意见'),
-        (r'保留意见(?!.*无保留)', '保留意见'),  # 排除"无保留意见"中的"保留"
-        (r'无保留意见', '无保留意见'),
-    ]
-    for pattern, label in opinion_patterns:
-        if re.search(pattern, text[:30000]):  # 只搜前30000字符（审计意见通常在前半部）
+        # 裸"无保留意见"前必须有"无"字（排除标准无保留）
+        (r'(?<=无)\s*保留意见', '带强调事项段的无保留意见'),  # 必须前面是"无"
+        (r'无\s*保留意见', '无保留意见'),
+        (r'保留意见', '保留意见'),
+    ]:
+        if re.search(kw, search_text, re.DOTALL):
             return label
     return None
 
@@ -708,4 +785,233 @@ def _supplement_balance_sheet(stock_code, market, records):
                         pass
     
     return supplemented
+
+
+def _build_financial_comparison_table(records, multi_year_data=None):
+    """构建多年财务对比HTML表格"""
+    if not records:
+        return ""
+
+    display_records = records[:4]
+
+    rows = []
+    for r in display_records:
+        rdate = str(r.get('REPORTDATE', ''))[:10]
+        rev = r.get('TOTAL_OPERATE_INCOME')
+        np = r.get('PARENT_NETPROFIT')
+        gm = r.get('GROSS_PROFIT_RATIO') or r.get('XSMLL')
+        roe = r.get('WEIGHTAVG_ROE')
+        eps = r.get('BASIC_EPS')
+
+        rev_yi = round(float(rev) / 1e8, 2) if rev else None
+        np_yi = round(float(np) / 1e8, 2) if np else None
+
+        rows.append({
+            'date': rdate,
+            'revenue': rev_yi,
+            'net_profit': np_yi,
+            'gross_margin': round(float(gm), 2) if gm else None,
+            'roe': round(float(roe), 2) if roe else None,
+            'eps': round(float(eps), 4) if eps else None,
+        })
+
+    if multi_year_data and multi_year_data.get('trend'):
+        trend = multi_year_data['trend']
+        ystz = trend.get('ystz_series', [])
+        profit_series = trend.get('profit_series', [])
+        for i, row in enumerate(rows):
+            if i < len(ystz) and ystz[i] and len(ystz[i]) > 1:
+                row['revenue_growth'] = round(ystz[i][1], 2) if ystz[i][1] is not None else None
+            if i < len(profit_series) and profit_series[i] and len(profit_series[i]) > 1:
+                if row['net_profit'] is None and profit_series[i][1]:
+                    row['net_profit'] = round(profit_series[i][1] / 1e8, 2)
+
+    html = '<table class="fin-table"><thead><tr>'
+    html += '<th>报告期</th><th>营收(亿)</th><th>净利润(亿)</th><th>毛利率(%)</th><th>ROE(%)</th><th>EPS(元)</th>'
+    html += '</tr></thead><tbody>'
+    for row in rows:
+        html += '<tr>'
+        html += f'<td>{row["date"]}</td>'
+        html += f'<td>{row["revenue"] if row["revenue"] is not None else "N/A"}</td>'
+        html += f'<td>{row["net_profit"] if row["net_profit"] is not None else "N/A"}</td>'
+        html += f'<td>{row["gross_margin"] if row["gross_margin"] is not None else "N/A"}</td>'
+        html += f'<td>{row["roe"] if row["roe"] is not None else "N/A"}</td>'
+        html += f'<td>{row["eps"] if row["eps"] is not None else "N/A"}</td>'
+        html += '</tr>'
+    html += '</tbody></table>'
+    return html
+
+
+def _generate_financial_ai_narrative(data, multi_year_data=None):
+    """生成财务分析AI叙事"""
+    records = data.get('records', [])
+    summary = data.get('summary', {})
+    audit = data.get('audit_opinion', '')
+    key_risks = data.get('key_risks', [])
+
+    evidence_parts = []
+    evidence_parts.append(f"审计意见: {audit}")
+
+    if summary:
+        evidence_parts.append(f"营收: {summary.get('revenue_亿', 'N/A')}亿 | 净利润: {summary.get('net_profit_亿', 'N/A')}亿 | 毛利率: {summary.get('gross_margin_pct', 'N/A')}%")
+
+    for r in records[:4]:
+        rdate = str(r.get('REPORTDATE', ''))[:10]
+        rev = round(float(r.get('TOTAL_OPERATE_INCOME', 0)) / 1e8, 2) if r.get('TOTAL_OPERATE_INCOME') else 'N/A'
+        np = round(float(r.get('PARENT_NETPROFIT', 0)) / 1e8, 2) if r.get('PARENT_NETPROFIT') else 'N/A'
+        gm = round(float(r.get('GROSS_PROFIT_RATIO', 0)), 2) if r.get('GROSS_PROFIT_RATIO') else 'N/A'
+        evidence_parts.append(f"{rdate}: 营收{rev}亿, 净利{np}亿, 毛利率{gm}%")
+
+    if multi_year_data and multi_year_data.get('trend'):
+        trend = multi_year_data['trend']
+        cagr_rev = trend.get('revenue_cagr_pct')
+        cagr_pro = trend.get('profit_cagr_pct')
+        if cagr_rev is not None:
+            evidence_parts.append(f"营收CAGR: {cagr_rev:+.2f}%")
+        if cagr_pro is not None:
+            evidence_parts.append(f"净利润CAGR: {cagr_pro:+.2f}%")
+
+    if multi_year_data and multi_year_data.get('cashflow_quality'):
+        cf = multi_year_data['cashflow_quality']
+        evidence_parts.append(f"现金流质量: {cf.get('quality_signal', 'N/A')} (经营CF/净利比: {cf.get('avg_cf_netprofit_ratio', 'N/A')})")
+
+    if key_risks:
+        evidence_parts.append(f"风险信号: {'; '.join(key_risks[:3])}")
+
+    if multi_year_data and multi_year_data.get('warnings'):
+        evidence_parts.append(f"财务预警: {'; '.join(multi_year_data['warnings'][:3])}")
+
+    evidence_block = '\n'.join(evidence_parts)
+
+    prompt = f"""以下是某上市公司的财务数据，请写一段专业的财务分析解读（300-500字）。
+
+要求：
+1. 分析营收和利润趋势（增长/下滑/拐点）
+2. 评估盈利能力（毛利率、ROE变化）
+3. 评估现金流质量
+4. 指出关键风险和异常信号
+5. 语言专业、客观、有洞察力
+
+===== 财务数据 =====
+{evidence_block}
+===== 数据结束 =====
+
+请输出财务分析解读："""
+
+    try:
+        from scripts.llm_config import call_llm
+        narrative = call_llm(
+            system_prompt="你是一位顶级券商财务分析师，擅长深度解读上市公司财务数据。",
+            user_prompt=prompt,
+            max_tokens=2048,
+        )
+        if narrative and len(narrative) > 100:
+            return narrative
+    except Exception as e:
+        print(f"  [财务AI解读] LLM调用失败: {e}")
+
+    return ""
+
+
+def build_evidence(data, findings=None):
+    """构建财务数据证据块（供统一AI分析器使用）"""
+    parts = []
+    records = data.get('records', [])
+    summary = data.get('summary', {})
+    audit = data.get('audit_opinion', '')
+    key_risks = data.get('key_risks', [])
+
+    parts.append(f"审计意见: {audit}")
+    if summary:
+        parts.append(f"营收: {summary.get('revenue_亿', 'N/A')}亿 | 净利润: {summary.get('net_profit_亿', 'N/A')}亿 | 毛利率: {summary.get('gross_margin_pct', 'N/A')}%")
+
+    for r in records[:4]:
+        rdate = str(r.get('REPORTDATE', ''))[:10]
+        rev = round(float(r.get('TOTAL_OPERATE_INCOME', 0)) / 1e8, 2) if r.get('TOTAL_OPERATE_INCOME') else 'N/A'
+        np = round(float(r.get('PARENT_NETPROFIT', 0)) / 1e8, 2) if r.get('PARENT_NETPROFIT') else 'N/A'
+        gm = round(float(r.get('GROSS_PROFIT_RATIO') or r.get('XSMLL') or 0), 2) if (r.get('GROSS_PROFIT_RATIO') or r.get('XSMLL')) else 'N/A'
+        parts.append(f"{rdate}: 营收{rev}亿, 净利{np}亿, 毛利率{gm}%")
+
+    multi_year = (findings or {}).get('multi_year_trend', {})
+    if multi_year and multi_year.get('trend'):
+        trend = multi_year['trend']
+        if trend.get('revenue_cagr_pct') is not None:
+            parts.append(f"营收CAGR: {trend['revenue_cagr_pct']:+.2f}%")
+        if trend.get('profit_cagr_pct') is not None:
+            parts.append(f"净利润CAGR: {trend['profit_cagr_pct']:+.2f}%")
+    if multi_year and multi_year.get('cashflow_quality'):
+        cf = multi_year['cashflow_quality']
+        parts.append(f"现金流质量: {cf.get('quality_signal', 'N/A')} (经营CF/净利比: {cf.get('avg_cf_netprofit_ratio', 'N/A')})")
+
+    if key_risks:
+        parts.append(f"风险信号: {'; '.join(key_risks[:3])}")
+    if multi_year and multi_year.get('warnings'):
+        parts.append(f"财务预警: {'; '.join(multi_year['warnings'][:3])}")
+
+    return '\n'.join(parts)
+
+
+def generate_report_section(data: dict, multi_year_data=None, batch_analysis=None) -> list:
+    lines = []
+    lines.append("## 财务报表分析")
+    lines.append("")
+
+    audit = data.get('audit_opinion', '未知')
+    lines.append(f"**审计意见**: {audit}")
+    lines.append("")
+
+    records = data.get('records', [])
+    if records:
+        table_html = _build_financial_comparison_table(records, multi_year_data)
+        if table_html:
+            lines.append("### 近三年+最新一期财务对比")
+            lines.append("")
+            lines.append(table_html)
+            lines.append("")
+
+    ai_narrative = ""
+    if batch_analysis and batch_analysis.get('financial'):
+        ai_narrative = batch_analysis['financial']
+    else:
+        ai_narrative = _generate_financial_ai_narrative(data, multi_year_data)
+
+    if ai_narrative:
+        lines.append("### 🤖 AI财务分析解读")
+        lines.append("")
+        lines.append(ai_narrative)
+        lines.append("")
+
+    if multi_year_data and multi_year_data.get('cashflow_quality'):
+        cf = multi_year_data['cashflow_quality']
+        cf_avg = cf.get('avg_cf_netprofit_ratio')
+        cf_signal = cf.get('quality_signal', '数据不足')
+        if cf_avg is not None:
+            lines.append("### 现金流质量")
+            lines.append("")
+            lines.append(f"- 经营CF/净利润比率: {cf_avg:.2f} → {cf_signal}")
+            lines.append("")
+
+    if multi_year_data and multi_year_data.get('warnings'):
+        lines.append("### ⚠️ 财务预警信号")
+        lines.append("")
+        for w in multi_year_data['warnings']:
+            lines.append(f"- {w}")
+        lines.append("")
+
+    if multi_year_data and multi_year_data.get('risks'):
+        lines.append("### 风险明细")
+        lines.append("")
+        for r in multi_year_data['risks']:
+            icon = "🔴" if r.get("level") == "high" else "🟡"
+            lines.append(f"- {icon} [{r.get('dim', '')}] {r.get('signal', '')}")
+        lines.append("")
+
+    key_risks = data.get('key_risks', [])
+    if key_risks and not (multi_year_data and multi_year_data.get('risks')):
+        lines.append("**⚠️ 财务风险信号**:")
+        for r in key_risks:
+            lines.append(f"- {r}")
+        lines.append("")
+
+    return lines
 

@@ -321,121 +321,94 @@ def trace_event_chain(event_tag, all_announcements, event_date_str, max_months=3
 
 def extract_ann_text_via_browser(stock_code, art_code, max_retries=2):
     """
-    通过xbrowser打开公告详情页，提取正文文本。
-    东方财富详情页直接渲染了完整公告内容，比PDF下载更可靠。
+    通过requests直接请求公告详情页，提取正文文本。
+    已禁用CloakBrowser（超时问题），改用API直接请求。
     
     Returns:
         str: 公告正文文本，失败返回None
     """
-    # 检测可用浏览器：优先edge（稳定），其次chrome，最后cft
-    _browsers_to_try = ['edge', 'chrome', 'cft']
-    _browser = 'cft'  # 默认
-    XB_SCRIPT = os.path.join(
-        os.environ.get('ProgramFiles', r'C:\Program Files'),
-        'QClaw', 'resources', 'openclaw', 'config', 'skills',
-        'xbrowser', 'scripts', 'xb.cjs'
-    )
-    if not os.path.exists(XB_SCRIPT):
-        return None
-    # 检查浏览器安装状态
-    try:
-        r0 = subprocess.run(['node', XB_SCRIPT, 'status'], capture_output=True, text=True, encoding='utf-8', timeout=10)
-        status_data = json.loads(r0.stdout)
-        browsers_info = status_data.get('data', {}).get('browsers', {})
-        for b in _browsers_to_try:
-            if browsers_info.get(b, {}).get('installed'):
-                _browser = b
-                break
-    except Exception:
-        pass
-    
     detail_url = f'https://data.eastmoney.com/notices/detail/{stock_code}/{art_code}.html'
     
     for attempt in range(max_retries):
         try:
-            # 1. 打开公告详情页
-            r1 = subprocess.run(
-                ['node', XB_SCRIPT, 'run', '--browser', _browser, 'open', detail_url],
-                capture_output=True, text=True, encoding='utf-8', timeout=25
-            )
-            data1 = json.loads(r1.stdout)
-            if not data1.get('ok'):
-                continue
-            title = data1.get('data',{}).get('result',{}).get('data',{}).get('title','')
-            if not title:
-                continue
+            r = requests.get(detail_url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': 'https://data.eastmoney.com/notices/',
+            }, timeout=15)
             
-            time.sleep(1.5)  # 等页面渲染
+            if r.status_code != 200:
+                return None
             
-            # 2. 提取正文：去掉导航/侧栏，只取公告内容区
-            js_extract = (
-                '(function() {'
-                'var main = document.querySelector(".detail-content")'
-                ' || document.querySelector(".newsContent")'
-                ' || document.querySelector("#ContentBody")'
-                ' || document.querySelector(".main-body");'
-                'if (main) return main.innerText;'
-                'var full = document.body.innerText;'
-                'var idx = full.indexOf("公告正文");'
-                'if (idx > 0) return full.slice(idx);'
-                'idx = full.indexOf("公告编号");'
-                'if (idx > 0) return full.slice(idx);'
-                'return full;'
-                '})()'
-            )
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(r.text, 'html.parser')
             
-            r2 = subprocess.run(
-                ['node', XB_SCRIPT, 'run', '--browser', _browser, 'eval', js_extract],
-                capture_output=True, text=True, encoding='utf-8', timeout=15
-            )
-            data2 = json.loads(r2.stdout)
-            if not data2.get('ok'):
-                continue
-            # JSON路径: data.result.data.result (xb CLI包装)
-            result_obj = data2.get('data',{}).get('result',{})
-            if isinstance(result_obj, dict):
-                text = result_obj.get('data', {}).get('result', '')
-                if not text:
-                    # 兼容：有时只有 data.result.result
-                    text = result_obj.get('result', '')
-            elif isinstance(result_obj, str):
-                text = result_obj
+            # 提取正文
+            content_div = (soup.find('div', class_='detail-content') or 
+                          soup.find('div', class_='newsContent') or
+                          soup.find('div', id='ContentBody') or
+                          soup.find('div', class_='main-body'))
+            
+            if content_div:
+                content = content_div.get_text(separator='\n', strip=True)
             else:
-                text = ''
-            if text and len(str(text)) > 200:
-                raw = str(text)
-                # 裁剪噪声：网友评论、页脚等
+                # 尝试从script标签获取JSON数据
+                scripts = soup.find_all('script')
+                for script in scripts:
+                    if script.string and 'content' in script.string:
+                        import re
+                        match = re.search(r'"content"\s*:\s*"([^"]+)"', script.string)
+                        if match:
+                            content = match.group(1).replace('\\n', '\n').replace('\\r', '')
+                            break
+                else:
+                    content = soup.get_text(separator='\n', strip=True)
+            
+            if content and len(content) > 200:
+                # 裁剪噪声
                 noise_markers = ['网友评论', '郑重声明', '全部评论', '加载更多', '查看全部评论']
                 for marker in noise_markers:
-                    cut = raw.find(marker)
-                    if cut > 200:  # 至少保留200字正文
-                        raw = raw[:cut]
+                    cut = content.find(marker)
+                    if cut > 200:
+                        content = content[:cut]
                         break
-                return raw
+                return content
+                        
         except Exception as e:
-            print(f'  [xbrowser提取] 第{attempt+1}次失败: {e}')
-            time.sleep(2)
+            print(f'  [公告正文提取] 第{attempt+1}次失败: {e}')
+            time.sleep(1)
     
     return None
 
 
 def download_announcement_pdf(ann_info, dest_dir, market='a'):
     """
-    下载公告PDF（兼容新旧art_code格式）
-    ann_info: dict with art_code (A股) or announcement_id+adjunct_url (港股)
-    
-    新格式art_code: AN202604161821271212 → PDF在pdf.dfcfw.com
-    旧格式art_code: 纯数字 → PDF在reportimages.eastmoney.com
+    下载公告PDF（优先巨潮资讯，备选东方财富）
+    ann_info: dict with art_code/adjunct_url (A股) or announcement_id+adjunct_url (港股)
     """
     os.makedirs(dest_dir, exist_ok=True)
 
     if market == 'a':
         art_code = ann_info.get('art_code', '')
-        if not art_code or len(art_code) < 10:
-            return None
+        adjunct_url = ann_info.get('adjunct_url', '')
         
-        # 新格式：AN开头 → pdf.dfcfw.com
-        if art_code.startswith('AN'):
+        # 优先：巨潮资讯PDF（最可靠）
+        if adjunct_url:
+            pdf_url = f"http://static.cninfo.com.cn/{adjunct_url}"
+            try:
+                r = requests.get(pdf_url, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Referer': 'http://www.cninfo.com.cn/',
+                }, timeout=30)
+                if r.status_code == 200 and r.content[:4] == b'%PDF' and len(r.content) > 5000:
+                    dest = os.path.join(dest_dir, f"{art_code}.pdf")
+                    with open(dest, 'wb') as f:
+                        f.write(r.content)
+                    return dest
+            except Exception:
+                pass
+        
+        # 备选1：东方财富新格式 AN开头 → pdf.dfcfw.com
+        if art_code and art_code.startswith('AN'):
             pdf_url = f'https://pdf.dfcfw.com/pdf/H2_{art_code}_1.pdf'
             try:
                 r = requests.get(pdf_url, headers={
@@ -449,30 +422,29 @@ def download_announcement_pdf(ann_info, dest_dir, market='a'):
                     return dest
             except Exception:
                 pass
-            # PDF下载失败（JS反爬），返回None，由调用方走xbrowser文本提取
-            return None
         
-        # 旧格式：纯数字 → reportimages
-        year = art_code[2:6]
-        month = art_code[6:8]
-        day = art_code[8:10]
-        base_urls = [
-            f"https://reportimages.eastmoney.com/DAILY/{year}/{month}/{day}/{art_code}.pdf",
-            f"https://reportimages.eastmoney.com/{year}/{month}/{day}/{art_code}.pdf",
-        ]
-        for url in base_urls:
-            try:
-                r = requests.get(url, headers={
-                    'User-Agent': 'Mozilla/5.0',
-                    'Referer': 'https://data.eastmoney.com/'
-                }, timeout=20)
-                if r.status_code == 200 and len(r.content) > 10000:
-                    dest = os.path.join(dest_dir, f"{art_code}.pdf")
-                    with open(dest, 'wb') as f:
-                        f.write(r.content)
-                    return dest
-            except Exception:
-                continue
+        # 备选2：东方财富旧格式 纯数字 → reportimages
+        if art_code and len(art_code) >= 10 and not art_code.startswith('AN'):
+            year = art_code[2:6]
+            month = art_code[6:8]
+            day = art_code[8:10]
+            base_urls = [
+                f"https://reportimages.eastmoney.com/DAILY/{year}/{month}/{day}/{art_code}.pdf",
+                f"https://reportimages.eastmoney.com/{year}/{month}/{day}/{art_code}.pdf",
+            ]
+            for url in base_urls:
+                try:
+                    r = requests.get(url, headers={
+                        'User-Agent': 'Mozilla/5.0',
+                        'Referer': 'https://data.eastmoney.com/'
+                    }, timeout=20)
+                    if r.status_code == 200 and len(r.content) > 10000:
+                        dest = os.path.join(dest_dir, f"{art_code}.pdf")
+                        with open(dest, 'wb') as f:
+                            f.write(r.content)
+                        return dest
+                except Exception:
+                    continue
 
     elif market == 'hk':
         aid = ann_info.get('announcement_id', '')
@@ -683,11 +655,147 @@ def _extract_facts_by_type(text, event_tag):
 
 
 # ============================================================
+def deep_analyze_announcement(title, text, event_tag, pub_date):
+    """
+    公告深度分析：从文本中提取关键信息并推断管理层意图和影响
+    
+    Args:
+        title: 公告标题
+        text: 公告正文文本
+        event_tag: 事件类型（如'重大资产重组'、'诉讼仲裁'等）
+        pub_date: 发布日期
+    
+    Returns:
+        dict: {
+            'facts': [],           # 关键事实列表
+            'intent': '',          # 管理层意图推断
+            'impact': '',         # 影响分析
+            'nature': '',         # 事项性质（利好/利空/中性）
+            'follow_up': '',       # 后续关注点
+            'confidence': ''      # 分析置信度
+        }
+    """
+    import re
+    from datetime import datetime
+    
+    result = {
+        'facts': [],
+        'intent': '',
+        'impact': '',
+        'nature': '中性',
+        'follow_up': '',
+        'confidence': 'medium'
+    }
+    
+    if not text or len(text) < 100:
+        result['confidence'] = 'low'
+        return result
+    
+    # 首先提取基础事实
+    result['facts'] = _extract_facts_by_type(text, event_tag)
+    
+    # ==================== 意图推断 ====================
+    # 根据事件类型推断管理层意图
+    intent_map = {
+        '资产重组': '寻求业务转型或规模扩张，提升竞争力',
+        '收购': '外延式增长，布局新业务或上下游整合',
+        '出售': '回笼资金聚焦核心业务，或剥离亏损资产',
+        '股权激励': '绑定管理层与股东利益，激励业绩增长',
+        '回购': '维护市值信心，提升每股收益',
+        '诉讼': '被动应对或主动维权',
+        '仲裁': '被动应对或主动维权',
+        '担保': '支持子公司或关联方融资',
+        '关联交易': '需关注定价公允性和利益输送风险',
+        '募集资金': '扩张投资或补充流动性',
+        '分红': '回报股东，提升投资者信心',
+        '减持': '股东套现或资金需求',
+        '增持': '股东看好公司前景或稳固控制权',
+        '募投': '项目投资或业务扩张',
+        '变更': '战略调整或优化治理',
+    }
+    for key, intent in intent_map.items():
+        if key in event_tag:
+            result['intent'] = intent
+            break
+    
+    # ==================== 影响分析 ====================
+    # 根据事件类型和金额规模判断影响
+    impact_amount = 0
+    for fact in result['facts']:
+        if '涉及金额' in fact or '交易对价' in fact or '涉案金额' in fact or '回购金额' in fact:
+            import re
+            # 提取金额数字
+            amt_match = re.search(r'([\d,.]+)', fact)
+            if amt_match:
+                amt_str = amt_match.group(1).replace(',', '')
+                try:
+                    amt = float(amt_str)
+                    if '亿' in fact:
+                        amt *= 1e8
+                    elif '万' in fact:
+                        amt *= 1e4
+                    impact_amount = amt
+                except:
+                    pass
+    
+    # 影响强度判断
+    if impact_amount >= 1e8:  # 1亿以上
+        result['impact'] = '重大影响'
+    elif impact_amount >= 1e7:  # 1000万以上
+        result['impact'] = '中等影响'
+    elif impact_amount > 0:
+        result['impact'] = '轻微影响'
+    else:
+        result['impact'] = '待定（需结合正文）'
+    
+    # ==================== 事项性质 ====================
+    # 根据事件类型判断利好/利空
+    bullish_tags = ['收购', '回购', '增持', '分红', '股权激励', '重大合同', '中标']
+    bearish_tags = ['诉讼', '仲裁', '减持', '处罚', '退市', 'ST', '风险', '违规']
+    
+    for tag in bullish_tags:
+        if tag in event_tag:
+            result['nature'] = '利好'
+            break
+    for tag in bearish_tags:
+        if tag in event_tag:
+            result['nature'] = '利空'
+            break
+    
+    # ==================== 后续关注 ====================
+    follow_map = {
+        '资产重组': '关注重组进展、审批结果、复牌时间',
+        '收购': '关注收购整合效果、协同效应',
+        '出售': '关注资金用途、是否聚焦主业',
+        '股权激励': '关注行权条件、业绩考核目标',
+        '回购': '关注回购完成进度、用于注销还是股权激励',
+        '诉讼': '关注判决执行结果、赔偿影响',
+        '仲裁': '关注裁决履行情况',
+        '减持': '关注减持节奏、是否清仓',
+        '增持': '关注后续增持计划',
+    }
+    for key, follow in follow_map.items():
+        if key in event_tag:
+            result['follow_up'] = follow
+            break
+    
+    # ==================== 置信度判断 ====================
+    if len(text) > 5000 and len(result['facts']) >= 3:
+        result['confidence'] = 'high'
+    elif len(text) > 1000 and len(result['facts']) >= 1:
+        result['confidence'] = 'medium'
+    else:
+        result['confidence'] = 'low'
+    
+    return result
+
+
 # 四、主采集函数
 # ============================================================
 
 def fetch_announcements(stock_code, market='a', data_dir=None,
-                        deep_extract=True, max_critical=5, trace_events=True):
+                        deep_extract=True, max_critical=5, max_major=10,
+                        trace_events=True, ai_analyze=True, max_ai_analyze=20):
     """
     获取并分类整理A股/港股公告（增强版）
     
@@ -695,8 +803,9 @@ def fetch_announcements(stock_code, market='a', data_dir=None,
         stock_code: 股票代码
         market: 'a' 或 'hk'
         data_dir: 数据目录（用于保存PDF）
-        deep_extract: 是否对CRITICAL公告自动下载PDF+提取内容
+        deep_extract: 是否对CRITICAL+MAJOR公告自动下载PDF+提取内容
         max_critical: 最多深挖的CRITICAL公告数量
+        max_major: 最多深挖的MAJOR公告数量（默认10）
         trace_events: 是否对重要事件进行溯源
     
     Returns:
@@ -704,7 +813,7 @@ def fetch_announcements(stock_code, market='a', data_dir=None,
             count,                    # 总公告数
             importance_stats,         # 分级统计
             critical_announcements,   # 🔴 CRITICAL公告列表（含提取内容）
-            major_announcements,      # 🟡 MAJOR公告列表
+            major_announcements,      # 🟡 MAJOR公告列表（含提取内容）
             routine_announcements,    # 🟢 ROUTINE公告列表
             event_chains,             # 事件溯源链
             categories,               # 按栏目分类
@@ -716,28 +825,65 @@ def fetch_announcements(stock_code, market='a', data_dir=None,
     all_anns = []
     steps = []  # 溯源步骤
 
-    # ---- A股：东方财富公告列表（多页）----
+    # ---- A股：优先使用巨潮资讯（可获取PDF），备选东方财富 ----
     if market == 'a':
-        em_pages = 0
-        em_total = 0
-        for page in range(1, 6):  # 最多5页
-            em_anns = _fetch_em_a_page(stock_code, page_index=page, page_size=200)
-            if not em_anns:
+        # 优先：巨潮资讯（PDF可下载）
+        cn_pages = 0
+        cn_total = 0
+        for page in range(1, 21):  # 最多20页
+            cn_anns = _fetch_cninfo_a_page(stock_code, page_index=page, page_size=100)
+            if not cn_anns:
                 break
-            em_pages += 1
-            em_total += len(em_anns)
-            all_anns.extend(em_anns)
-            if len(em_anns) < 200:
+            cn_pages += 1
+            cn_total += len(cn_anns)
+            all_anns.extend(cn_anns)
+            if len(cn_anns) < 100:
                 break
             time.sleep(0.3)
-        steps.append({
-            'step': 'em_announce',
-            'label': '东方财富公告API',
-            'source': 'em_announce',
-            'pages': em_pages,
-            'count': em_total,
-            'status': 'OK' if em_total > 0 else 'EMPTY',
-        })
+        
+        if cn_total > 0:
+            steps.append({
+                'step': 'cninfo_a',
+                'label': '巨潮资讯公告API',
+                'source': 'cninfo_api',
+                'pages': cn_pages,
+                'count': cn_total,
+                'status': 'OK',
+            })
+        else:
+            # 备选：东方财富
+            em_pages = 0
+            em_total = 0
+            for page in range(1, 6):
+                em_anns = _fetch_em_a_page(stock_code, page_index=page, page_size=200)
+                if not em_anns:
+                    break
+                em_pages += 1
+                em_total += len(em_anns)
+                all_anns.extend(em_anns)
+                if len(em_anns) < 200:
+                    break
+                time.sleep(0.3)
+            steps.append({
+                'step': 'em_announce',
+                'label': '东方财富公告API',
+                'source': 'em_announce',
+                'pages': em_pages,
+                'count': em_total,
+                'status': 'OK' if em_total > 0 else 'EMPTY',
+            })
+        
+        # 补充：获取投资者关系活动记录表（fulltextSearch API不返回此类公告）
+        relation_anns = _fetch_cninfo_relation_records(stock_code, months=12)
+        if relation_anns:
+            all_anns.extend(relation_anns)
+            steps.append({
+                'step': 'cninfo_relation',
+                'label': '投资者关系活动记录',
+                'source': 'cninfo_relation',
+                'count': len(relation_anns),
+                'status': 'OK',
+            })
 
     # ---- 港股：巨潮CNINFO（多页）----
     elif market == 'hk':
@@ -804,37 +950,120 @@ def fetch_announcements(stock_code, market='a', data_dir=None,
         else:
             routine_list.append(ann)
     
-    # ---- CRITICAL公告深挖：xbrowser文本提取 > PDF下载 ----
-    if deep_extract and data_dir and critical_list:
+    # ---- CRITICAL + MAJOR + 年报季报深度提取：xbrowser文本 > PDF ----
+    deep_targets = []
+    
+    # CRITICAL：全部处理
+    for ann in critical_list[:max_critical]:
+        ann['_deep_level'] = 'critical'
+        deep_targets.append(ann)
+    
+    # MAJOR：筛选重要类型，最多max_major条
+    if max_major is None:
+        max_major = 10
+    major_priority_tags = [
+        '高管变动', '股权激励', '诉讼仲裁', '监管函', '关联交易',
+        '定增', '回购', '增持', '减持', '重大合同', '担保', '资金占用'
+    ]
+    major_filtered = [
+        ann for ann in major_list
+        if any(tag in ann.get('importance_tag', '') for tag in major_priority_tags)
+    ][:max_major]
+    for ann in major_filtered:
+        ann['_deep_level'] = 'major'
+        deep_targets.append(ann)
+    
+    # 年报季报：定期报告也需要深度提取
+    report_tags = ['年度报告', '半年度报告', '季度报告', '季报', '一季报', '三季报']
+    report_filtered = [
+        ann for ann in routine_list
+        if any(tag in ann.get('title', '') for tag in report_tags)
+        and '摘要' not in ann.get('title', '')  # 排除摘要版
+    ][:5]  # 最多5份定期报告
+    for ann in report_filtered:
+        ann['_deep_level'] = 'report'
+        deep_targets.append(ann)
+    
+    if deep_extract and data_dir and deep_targets:
         pdf_dir = os.path.join(data_dir, 'critical_announcements')
-        extracted_count = 0
-        for ann in critical_list[:max_critical]:
+        os.makedirs(pdf_dir, exist_ok=True)
+        extracted_critical = 0
+        extracted_major = 0
+
+        # 引入统一tmp缓存管理器（避免重复下载PDF）
+        try:
+            from scripts.tmp_paths import get_cached_pdf_path, save_to_pdf_cache
+            _has_cache = True
+        except ImportError:
+            _has_cache = False
+
+        for ann in deep_targets:
             try:
                 art_code = ann.get('art_code', '')
                 content = None
-                
-                # 优先方案：xbrowser提取详情页正文（更快、抗反爬）
-                if market == 'a' and art_code:
-                    text = extract_ann_text_via_browser(stock_code, art_code)
-                    if text:
-                        content = extract_key_content_from_text(
-                            text, ann.get('importance_tag', '')
-                        )
-                        ann['extract_method'] = 'xbrowser'
-                        ann['detail_url'] = f'https://data.eastmoney.com/notices/detail/{stock_code}/{art_code}.html'
-                
-                # 备选方案：下载PDF + PyMuPDF提取
+                pdf_path = None
+
+                # 优先方案A：从PDF缓存读取（跨次复用）
+                if _has_cache and art_code:
+                    cached_pdf = get_cached_pdf_path(stock_code, art_code)
+                    if cached_pdf:
+                        # 缓存命中：直接复用，跳过下载
+                        pdf_path = str(cached_pdf)
+                        content = extract_key_content(pdf_path, ann.get('importance_tag', ''), max_pages=15)
+                        if content:
+                            ann['pdf_path'] = pdf_path
+                            ann['extract_method'] = 'pdf_cache'
+                            ann['cache_hit'] = True
+
+                # 优先方案B：直接下载PDF（首次或缓存失效）
                 if not content:
                     pdf_path = download_announcement_pdf(ann, pdf_dir, market=market)
                     if pdf_path:
-                        content = extract_key_content(pdf_path, ann.get('importance_tag', ''))
+                        # 下载成功后，存入统一tmp缓存
+                        if _has_cache and art_code and os.path.exists(pdf_path):
+                            try:
+                                save_to_pdf_cache(pdf_path, stock_code, art_code)
+                            except Exception:
+                                pass  # 缓存失败不影响主流程
+                        content = extract_key_content(pdf_path, ann.get('importance_tag', ''), max_pages=15)
                         ann['pdf_path'] = pdf_path
                         ann['extract_method'] = 'pdf'
+                        print(f"    [PDF提取] {pdf_path} → key_facts: {content.get('key_facts', [])}")
+                    else:
+                        print(f"    [PDF下载失败] art_code: {ann.get('art_code', '')}, adjunct_url: {ann.get('adjunct_url', '')}")
+                
+                # 备选方案：HTML提取（仅在PDF不可用时）
+                if not content and market == 'a' and art_code:
+                    text = extract_ann_text_via_browser(stock_code, art_code)
+                    if text and len(text) > 300 and '公告正文' in text:
+                        content = extract_key_content_from_text(
+                            text, ann.get('importance_tag', '')
+                        )
+                        ann['extract_method'] = 'html'
+                        ann['detail_url'] = f'https://data.eastmoney.com/notices/detail/{stock_code}/{art_code}.html'
                 
                 if content:
                     ann['extracted_content'] = content
-                    extracted_count += 1
-                    print(f"  [深挖] {ann.get('date','')[:10]} {ann.get('title','')[:50]} → {content.get('key_facts', [])}")
+                    level = ann.get('_deep_level', 'critical')
+                    if level == 'critical':
+                        extracted_critical += 1
+                    else:
+                        extracted_major += 1
+                    print(f"  [深挖·{level.upper()[:4]}] {ann.get('date','')[:10]} {ann.get('title','')[:50]} → {content.get('key_facts', [])}")
+                    
+                    # 深度AI分析（CRITICAL和MAJOR均执行）
+                    try:
+                        full_text = content.get('full_text', '') or content.get('summary', '')
+                        if len(full_text) > 100:
+                            deep_result = deep_analyze_announcement(
+                                ann.get('title', ''),
+                                full_text,
+                                ann.get('importance_tag', ''),
+                                ann.get('date', '')
+                            )
+                            ann['deep_analysis'] = deep_result
+                    except Exception as e:
+                        ann['deep_analysis'] = {'error': str(e)}
                 else:
                     ann['extracted_content'] = {'error': '文本提取失败（xbrowser+PDF均不可用）'}
             except Exception as e:
@@ -842,18 +1071,32 @@ def fetch_announcements(stock_code, market='a', data_dir=None,
         
         steps.append({
             'step': 'deep_extract',
-            'label': 'CRITICAL公告深挖',
+            'label': 'CRITICAL+MAJOR公告深挖',
             'source': 'xbrowser + pdf_fallback',
-            'count': extracted_count,
-            'status': 'OK' if extracted_count > 0 else 'SKIP',
+            'critical_count': extracted_critical,
+            'major_count': extracted_major,
+            'status': 'OK' if (extracted_critical + extracted_major) > 0 else 'SKIP',
         })
     
-    # ---- 事件溯源 ----
+    # ---- AI分析已移至统一分析器（ai_unified_analyzer.py）----
+    # 原来的逐条LLM调用和批量分析现在在阶段2统一执行
+    # fetch_announcements() 只负责纯数据采集
+
+    # ---- 事件溯源（CRITICAL + MAJOR重要类型）----
     event_chains = {}
-    if trace_events and critical_list:
-        # 对每种CRITICAL事件类型做溯源
+    # 合并CRITICAL+MAJOR重要公告用于溯源
+    major_priority_tags = [
+        '高管变动', '股权激励', '诉讼仲裁', '监管函', '关联交易',
+        '定增', '回购', '增持', '减持', '重大合同', '担保', '资金占用'
+    ]
+    trace_targets = critical_list + [
+        ann for ann in major_list
+        if any(tag in ann.get('importance_tag', '') for tag in major_priority_tags)
+    ]
+    
+    if trace_events and trace_targets:
         traced_tags = set()
-        for ann in critical_list:
+        for ann in trace_targets:
             tag = ann.get('importance_tag', '')
             if tag in traced_tags:
                 continue
@@ -893,7 +1136,7 @@ def fetch_announcements(stock_code, market='a', data_dir=None,
     ok_step = next((s for s in steps if s['status'] == 'OK'), None)
     top_source = ok_step['source'] if ok_step else ('em_announce' if market == 'a' else 'cninfo_hk_announce')
 
-    return {
+    result = {
         'count': len(all_anns),
         'importance_stats': importance_stats,
         'critical_announcements': critical_list,
@@ -909,7 +1152,10 @@ def fetch_announcements(stock_code, market='a', data_dir=None,
                 all_anns[-1]['date'] if all_anns else None,
                 all_anns[0]['date'] if all_anns else None,
             ),
-            'deep_extracted': sum(1 for a in critical_list if a.get('extracted_content')),
+            'deep_extracted': {
+                'critical': sum(1 for a in critical_list if a.get('extracted_content')),
+                'major': sum(1 for a in major_list if a.get('extracted_content')),
+            },
             'event_chains_count': len(event_chains),
         },
         '_meta': {
@@ -918,6 +1164,8 @@ def fetch_announcements(stock_code, market='a', data_dir=None,
             'fetched_at': _dt.now().isoformat(),
         },
     }
+
+    return result
 
 
 # ============================================================
@@ -970,6 +1218,71 @@ def _fetch_em_a_page(stock_code, page_index=1, page_size=200):
             'column_codes': col_codes,  # 新增：保留完整column_code
             'source': '东方财富',
             'stock_code': stock_code,
+        })
+    return result
+
+
+def _fetch_cninfo_a_page(stock_code, page_index=1, page_size=50):
+    """巨潮CNINFO A股公告（单页）- 可获取PDF内容"""
+    params = {
+        'searchkey': stock_code,
+        'sdate': '',
+        'edate': '',
+        'isfulltext': 'false',
+        'sortName': 'pubdate',
+        'sortType': 'desc',
+        'plateCode': '',
+        'pageNum': page_index,
+        'pageSize': page_size,
+    }
+
+    raw = safe_get(
+        CNINFO_URL,
+        params=params,
+        headers=CNINFO_HEADERS,
+        timeout=20,
+        retries=2,
+        backoff=1.5,
+    )
+
+    if not raw:
+        return []
+    if isinstance(raw, dict) and raw.get('error'):
+        return []
+
+    items = raw.get('announcements', []) or []
+
+    result = []
+    for item in items:
+        raw_title = item.get('announcementTitle', '')
+        title = re.sub(r'<[^>]+>', '', raw_title)
+        aid = item.get('announcementId', '')
+        pub_ts = item.get('announcementTime', 0)
+        if pub_ts:
+            pub_date = datetime.fromtimestamp(pub_ts / 1000).strftime('%Y-%m-%d')
+        else:
+            pub_date = ''
+
+        adjunct_url = item.get('adjunctUrl', '')
+        
+        # 从columnId提取分类
+        column_id = item.get('columnId', '')
+        column_codes = column_id.split('||') if column_id else []
+        
+        # 重要性分类
+        level, tag = classify_importance(title, column_codes)
+        
+        result.append({
+            'date': pub_date,
+            'title': title,
+            'art_code': aid,
+            'category': tag,
+            'column_codes': column_codes,
+            'source': '巨潮资讯',
+            'stock_code': stock_code,
+            'adjunct_url': adjunct_url,
+            'importance': level,
+            'importance_tag': tag,
         })
     return result
 
@@ -1031,6 +1344,126 @@ def _fetch_cninfo_hk_page(stock_code, page_index=1, page_size=20):
             'importance_tag': tag,
         })
     return result
+
+
+def _fetch_cninfo_relation_records(stock_code, months=12):
+    """获取投资者关系活动记录表（通过AKShare的stock_zh_a_disclosure_relation_cninfo）"""
+    try:
+        import akshare as ak
+    except ImportError:
+        print("  ⚠️ akshare未安装，跳过投资者关系活动记录获取")
+        return []
+    
+    from datetime import datetime, timedelta
+    
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=months * 30)
+    
+    start_date_str = start_date.strftime('%Y%m%d')
+    end_date_str = end_date.strftime('%Y%m%d')
+    
+    result = []
+    try:
+        df = ak.stock_zh_a_disclosure_relation_cninfo(
+            symbol=stock_code,
+            market='沪深京',
+            start_date=start_date_str,
+            end_date=end_date_str,
+        )
+        
+        if df is not None and not df.empty:
+            for _, row in df.iterrows():
+                title = str(row.get('公告标题', ''))
+                pub_time = str(row.get('公告时间', ''))
+                pub_date = pub_time.split(' ')[0] if pub_time else ''
+                link = str(row.get('公告链接', ''))
+                
+                # 从链接中提取announcement_id
+                aid = ''
+                if 'announcementId=' in link:
+                    m = re.search(r'announcementId=(\d+)', link)
+                    if m:
+                        aid = m.group(1)
+                
+                # 获取公告正文内容
+                content = ''
+                if aid:
+                    try:
+                        content = _fetch_relation_content(aid, pub_date=pub_date)
+                    except Exception:
+                        pass
+                
+                result.append({
+                    "date": pub_date,
+                    "title": title,
+                    "announcement_id": aid,
+                    "adjunct_url": '',
+                    "detail_url": link,
+                    "source": "巨潮资讯-投资者关系",
+                    "stock_code": stock_code,
+                    "importance": MAJOR,
+                    "importance_tag": "投资者关系活动",
+                    "column_code": "relation",
+                    "content": content,
+                })
+    except Exception as e:
+        print(f"  ⚠️ 获取投资者关系活动记录失败: {e}")
+    
+    return result
+
+
+def _fetch_relation_content(announcement_id, pub_date=''):
+    """获取投资者关系活动记录的正文内容（从PDF提取）
+
+    Args:
+        announcement_id: 公告ID
+        pub_date: 公告日期（格式：YYYY-MM-DD），如果提供则直接使用
+    """
+    if not announcement_id:
+        return ''
+    
+    try:
+        import io
+        from PyPDF2 import PdfReader
+        from datetime import datetime, timedelta
+        
+        # 如果提供了公告日期，直接使用
+        if pub_date:
+            pdf_url = f"http://static.cninfo.com.cn/finalpage/{pub_date}/{announcement_id}.PDF"
+            try:
+                pdf_resp = requests.get(pdf_url, headers=CNINFO_HEADERS, timeout=10)
+                if pdf_resp.status_code == 200 and len(pdf_resp.content) > 1000:
+                    reader = PdfReader(io.BytesIO(pdf_resp.content))
+                    text = ''
+                    for page in reader.pages[:5]:
+                        text += page.extract_text() or ''
+                    if text.strip():
+                        return text[:3000]
+            except Exception:
+                pass
+        
+        # 如果没有提供日期或下载失败，尝试最近365天
+        today = datetime.now()
+        for days_back in range(0, 365):
+            date = today - timedelta(days=days_back)
+            date_str = date.strftime('%Y-%m-%d')
+            pdf_url = f"http://static.cninfo.com.cn/finalpage/{date_str}/{announcement_id}.PDF"
+            
+            try:
+                pdf_resp = requests.get(pdf_url, headers=CNINFO_HEADERS, timeout=10)
+                if pdf_resp.status_code == 200 and len(pdf_resp.content) > 1000:
+                    reader = PdfReader(io.BytesIO(pdf_resp.content))
+                    text = ''
+                    for page in reader.pages[:5]:
+                        text += page.extract_text() or ''
+                    if text.strip():
+                        return text[:3000]
+            except Exception:
+                continue
+        
+        return ''
+    except Exception:
+        return ''
 
 
 def _classify_hk_importance(title):
@@ -1100,3 +1533,316 @@ if __name__ == '__main__':
         for tag, chain in result['event_chains'].items():
             print(f"  [{tag}] 追溯{chain['chain_length']}条:")
             print(f"  {chain['timeline'][:200]}")
+
+
+def _generate_company_narrative_from_announcements(data):
+    """从公告证据生成公司全景叙事（LLM驱动）"""
+    critical = data.get('critical_announcements', [])
+    major = data.get('major_announcements', [])
+
+    evidence_parts = []
+    for a in critical + major:
+        content = a.get('extracted_content', {})
+        if not isinstance(content, dict) or content.get('error'):
+            continue
+        full_text = content.get('full_text_preview', '') or ''
+        facts = content.get('key_facts', [])
+        if not full_text and not facts:
+            continue
+        part = f"【{a.get('date','')[:10]}】{a.get('title','')}\n"
+        if facts:
+            part += "关键事实: " + "; ".join(facts[:5]) + "\n"
+        if full_text:
+            part += f"公告摘要: {full_text[:800]}\n"
+        evidence_parts.append(part)
+
+    if not evidence_parts:
+        return ""
+
+    evidence_block = "\n".join(evidence_parts[:40])
+    if len(evidence_block) > 35000:
+        evidence_block = evidence_block[:35000] + "\n...(已截断)"
+
+    prompt = f"""以下是{data.get('count', 0)}条公告中提取的关键证据（来自巨潮资讯PDF原文），请基于这些真实证据，写一篇完整的公司情况叙述报告。
+
+要求：
+1. 这是一篇**连贯的叙述性报告**，不是逐条解读，不是分类列表
+2. 像写一篇深度公司研究报告一样，用流畅的语言讲述公司近三年发生了什么
+3. 按时间线和逻辑线交织叙述，让读者能清晰理解公司的发展脉络
+4. 涵盖：控制权变化、重大资产重组、财务异常信号、法律诉讼风险、资金担保动向
+5. 每个重要结论都要引用具体的公告证据（日期+公告标题）
+6. 用Markdown格式，适当使用标题分段
+7. 字数控制在2000-4000字
+8. 语言风格：专业、客观、有洞察力
+
+===== 公告证据 =====
+{evidence_block}
+===== 证据结束 =====
+
+请输出公司情况叙述报告（Markdown格式）："""
+
+    try:
+        from scripts.llm_config import call_llm
+        narrative = call_llm(
+            system_prompt="你是一位顶级券商首席分析师，擅长基于原始公告证据撰写深度公司研究报告。你的报告风格是连贯叙述、逻辑清晰、证据充分，绝不做表面文章。",
+            user_prompt=prompt,
+            max_tokens=8192,
+        )
+        if narrative and len(narrative) > 200:
+            print(f"  [AI全景叙事] 生成成功，{len(narrative)}字，基于{len(evidence_parts)}条全文证据")
+            return narrative
+        else:
+            print(f"  [AI全景叙事] 生成结果过短({len(narrative or '')}字)，降级为证据列表")
+    except Exception as e:
+        print(f"  [AI全景叙事] LLM调用失败: {e}，降级为证据列表")
+
+    lines = []
+    for part in evidence_parts[:20]:
+        lines.append(part)
+    return '\n'.join(lines)
+
+
+def build_evidence(data, findings=None):
+    """构建公告数据证据块（供统一AI分析器使用）"""
+    critical = data.get('critical_announcements', [])
+    major = data.get('major_announcements', [])
+    all_important = critical + major
+
+    if not all_important:
+        return ""
+
+    parts = []
+    stats = data.get('importance_stats', {})
+    parts.append(f"公告总数: {data.get('count', 0)}条 | CRITICAL: {stats.get('critical', 0)}条 | MAJOR: {stats.get('major', 0)}条")
+
+    for i, a in enumerate(all_important[:20], 1):
+        part = f"【公告{i}】[{a.get('importance','').upper()}] {a.get('importance_tag','')}\n"
+        part += f"日期: {a.get('date','')[:10]}\n"
+        part += f"标题: {a.get('title','')}\n"
+
+        content = a.get('extracted_content', {})
+        if isinstance(content, dict) and not content.get('error'):
+            facts = content.get('key_facts', [])
+            if facts:
+                part += f"关键事实: {'; '.join(facts[:5])}\n"
+            preview = content.get('full_text_preview', '')
+            if preview:
+                part += f"正文摘要: {preview[:800]}\n"
+        else:
+            raw_content = a.get('content', '')
+            if raw_content:
+                part += f"正文摘要: {raw_content[:800]}\n"
+
+        deep = a.get('deep_analysis', {})
+        if isinstance(deep, dict) and deep.get('facts'):
+            part += f"深度提取: {'; '.join(deep['facts'][:3])}\n"
+            if deep.get('nature'):
+                part += f"性质判断: {deep['nature']}\n"
+
+        parts.append(part)
+
+    return '\n'.join(parts)
+
+
+def generate_report_section(data):
+    lines = []
+    lines.append("## 公告全景（近三年）")
+    lines.append(f"")
+    lines.append(f"**公告总数**: {data.get('count', 0)}条")
+
+    stats = data.get('importance_stats', {})
+    if stats:
+        lines.append(f"")
+        lines.append(f"**重要性分级**: ")
+        lines.append(f"- 🔴 CRITICAL（重大事项，已深挖）: {stats.get('critical', 0)}条")
+        lines.append(f"- 🟡 MAJOR（较重要，关注动向）: {stats.get('major', 0)}条")
+        lines.append(f"- 🟢 ROUTINE（常规披露）: {stats.get('routine', 0)}条")
+    lines.append(f"")
+
+    batch = data.get('_batch_analysis', {})
+    ai_narrative = batch.get('narrative', '')
+    if not ai_narrative:
+        ai_narrative = _generate_company_narrative_from_announcements(data)
+    if ai_narrative:
+        lines.append("### 🤖 AI公司全景叙事（基于近三年公告全文）")
+        lines.append(f"")
+        lines.append(ai_narrative)
+        lines.append(f"")
+
+    if batch.get('trend_analysis'):
+        lines.append("### 📈 趋势分析")
+        lines.append(f"")
+        lines.append(batch['trend_analysis'])
+        lines.append(f"")
+
+    if batch.get('key_insights'):
+        lines.append("### 💡 核心洞察")
+        lines.append(f"")
+        for insight in batch['key_insights']:
+            lines.append(f"- {insight}")
+        lines.append(f"")
+
+    critical = data.get('critical_announcements', [])
+    if critical:
+        lines.append("### 🔴 重大事项（CRITICAL）")
+        lines.append(f"")
+        for a in critical:
+            tag = a.get('importance_tag', '')
+            lines.append(f"#### {a.get('date','')[:10]} | {tag}")
+            lines.append(f"{a.get('title','')[:100]}")
+
+            ai_analysis = a.get('ai_analysis', {})
+            if ai_analysis:
+                lines.append(f"")
+                if ai_analysis.get('summary'):
+                    lines.append(f"**AI摘要**: {ai_analysis['summary']}")
+                if ai_analysis.get('impact_analysis'):
+                    lines.append(f"**影响分析**: {ai_analysis['impact_analysis']}")
+                if ai_analysis.get('key_points'):
+                    lines.append(f"**关键信息**:")
+                    for kp in ai_analysis['key_points'][:3]:
+                        lines.append(f"- {kp}")
+                if ai_analysis.get('risk_factors'):
+                    lines.append(f"**风险提示**:")
+                    for rf in ai_analysis['risk_factors'][:3]:
+                        lines.append(f"- ⚠️ {rf}")
+
+            content = a.get('extracted_content', {})
+            if content and not content.get('error'):
+                facts = content.get('key_facts', [])
+                if facts and not ai_analysis:
+                    lines.append(f"")
+                    for f in facts:
+                        lines.append(f"- {f}")
+                pages = content.get('page_count', 0)
+                if pages:
+                    lines.append(f"")
+                    lines.append(f"*PDF {pages}页，已提取关键内容*")
+            lines.append(f"")
+
+    major = data.get('major_announcements', [])
+    if major:
+        lines.append("### 🟡 较重要事项（MAJOR）")
+        lines.append(f"")
+
+        ai_analyzed = [a for a in major if a.get('ai_analysis')][:10]
+        for a in ai_analyzed:
+            tag = a.get('importance_tag', '')
+            lines.append(f"- **{a.get('date','')[:10]}** [{tag}] {a.get('title','')[:80]}")
+            ai_summary = a.get('ai_analysis', {}).get('summary', '')
+            if ai_summary:
+                lines.append(f"  → {ai_summary[:100]}...")
+
+        remaining = [a for a in major if not a.get('ai_analysis')][:10]
+        for a in remaining:
+            tag = a.get('importance_tag', '')
+            lines.append(f"- **{a.get('date','')[:10]}** [{tag}] {a.get('title','')[:80]}")
+
+        total_remaining = len(major) - len(ai_analyzed) - len(remaining)
+        if total_remaining > 0:
+            lines.append(f"- ... 还有{total_remaining}条MAJOR公告")
+        lines.append(f"")
+
+    chains = data.get('event_chains', {})
+    if chains:
+        lines.append("### 📎 事件溯源链")
+        lines.append(f"")
+        lines.append("*重要事件追溯历史关联公告，理清来龙去脉*")
+        lines.append(f"")
+        for tag, chain in chains.items():
+            chain_anns = chain.get('chain', [])
+            origin = chain.get('origin')
+            lines.append(f"#### {tag}（追溯{chain.get('chain_length',0)}条）")
+            lines.append(f"")
+            if origin:
+                lines.append(f"**源头**: {origin.get('date','')[:10]} | {origin.get('title','')[:80]}")
+                lines.append(f"")
+            for a in chain_anns[:8]:
+                lines.append(f"- {a.get('date','')[:10]} | {a.get('title','')[:80]}")
+            lines.append(f"")
+
+    categories = data.get('categories', {})
+    if categories:
+        lines.append("### 分类统计")
+        lines.append(f"")
+        for cat, anns in sorted(categories.items(), key=lambda x: len(x[1]), reverse=True)[:10]:
+            lines.append(f"- {cat}: {len(anns)}条")
+        lines.append(f"")
+
+    key_events = data.get('key_events', [])
+    if key_events and not critical:
+        lines.append("**重大事件清单**:")
+        for e in key_events[:15]:
+            lines.append(f"- **{e.get('date','')}** {e.get('title','')[:80]}")
+        lines.append(f"")
+
+    return lines
+
+
+def generate_report_section_brief(data):
+    """精简版报告，用于HTML报告 - 只保留AI叙事和关键统计"""
+    lines = []
+    lines.append("## 公告全景（近三年）")
+    lines.append("")
+    lines.append(f"**公告总数**: {data.get('count', 0)}条")
+
+    stats = data.get('importance_stats', {})
+    if stats:
+        lines.append("")
+        lines.append("**重要性分级**:")
+        lines.append(f"- 🔴 CRITICAL（重大事项，已深挖）: {stats.get('critical', 0)}条")
+        lines.append(f"- 🟡 MAJOR（较重要，关注动向）: {stats.get('major', 0)}条")
+        lines.append(f"- 🟢 ROUTINE（常规披露）: {stats.get('routine', 0)}条")
+    lines.append("")
+
+    batch = data.get('_batch_analysis', {})
+    ai_narrative = batch.get('narrative', '')
+    if not ai_narrative:
+        ai_narrative = _generate_company_narrative_from_announcements(data)
+    if ai_narrative:
+        lines.append("### 🤖 AI公司全景叙事（基于近三年公告全文）")
+        lines.append("")
+        lines.append(ai_narrative)
+        lines.append("")
+
+    if batch.get('key_insights'):
+        lines.append("### 💡 核心洞察")
+        lines.append("")
+        for insight in batch['key_insights']:
+            lines.append(f"- {insight}")
+        lines.append("")
+
+    critical = data.get('critical_announcements', [])
+    if critical:
+        lines.append("### 🔴 重大事项摘要")
+        lines.append("")
+        for a in critical[:8]:
+            tag = a.get('importance_tag', '')
+            ai_summary = a.get('ai_analysis', {}).get('summary', '')
+            summary_text = f" — {ai_summary[:80]}" if ai_summary else ""
+            lines.append(f"- **{a.get('date','')[:10]}** [{tag}] {a.get('title','')[:60]}{summary_text}")
+        if len(critical) > 8:
+            lines.append(f"- ... 还有{len(critical)-8}条重大事项（详见完整MD报告）")
+        lines.append("")
+
+    major = data.get('major_announcements', [])
+    if major:
+        lines.append(f"### 🟡 较重要事项: {len(major)}条")
+        lines.append("")
+        categories = data.get('categories', {})
+        if categories:
+            top_cats = sorted(categories.items(), key=lambda x: len(x[1]), reverse=True)[:6]
+            lines.append("**主要类型分布**:")
+            for cat, anns in top_cats:
+                lines.append(f"- {cat}: {len(anns)}条")
+        lines.append("")
+
+    chains = data.get('event_chains', {})
+    if chains:
+        lines.append("### 📎 事件溯源链")
+        lines.append("")
+        for tag, chain in chains.items():
+            lines.append(f"- **{tag}**: 追溯{chain.get('chain_length',0)}条关联公告")
+        lines.append("")
+
+    return lines

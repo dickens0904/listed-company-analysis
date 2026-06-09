@@ -81,7 +81,7 @@ def _detect_market(stock_code, market="a"):
     return "a"
 
 
-def fetch_valuation(stock_code, market="a", data_dir=None, records=None):
+def fetch_valuation(stock_code, market="a", data_dir=None, records=None, financial_data=None):
     """主函数：估值分析"""
     # 先检测正确市场
     actual_market = _detect_market(stock_code, market)
@@ -184,6 +184,33 @@ def fetch_valuation(stock_code, market="a", data_dir=None, records=None):
                 "float_market_cap_亿": round(fval("f117", 1) / 1e8, 2) if fval("f117") else None,
             })
             result["valuation_source"] = result.get("valuation_source", "") + "+quote_api"
+
+    # 如果东财API失败，使用财报数据+股价计算估值
+    if not result["current"].get("pe_ttm") and financial_data:
+        fin_records = financial_data.get('records', [])
+        if fin_records:
+            latest = fin_records[0]
+            eps = safe_float(latest.get('BASIC_EPS'))
+            bps = safe_float(latest.get('BPS'))
+            revenue = safe_float(latest.get('TOTAL_OPERATE_INCOME'))
+            net_profit = safe_float(latest.get('PARENT_NETPROFIT'))
+
+            price = result["current"].get("price")
+            market_cap = result["current"].get("market_cap_亿")
+
+            if eps and eps > 0 and price:
+                result["current"]["pe_ttm"] = round(price / eps, 2)
+                result["valuation_source"] = result.get("valuation_source", "") + "+financial_calc"
+
+            if bps and bps > 0 and price:
+                result["current"]["pb"] = round(price / bps, 2)
+
+            if revenue and revenue > 0 and market_cap:
+                rev_yi = revenue / 1e8
+                result["current"]["ps"] = round(market_cap / rev_yi, 2)
+
+            if not result["current"].get("company_name"):
+                result["current"]["company_name"] = financial_data.get('summary', {}).get('company_name', '')
 
     # 2. 历史PE
     if records is None:
@@ -314,9 +341,11 @@ def _valuation_conclusion(result):
     signals = []
 
     pe = cur.get("pe_ttm")
-    if pe:
+    is_loss = False
+    if pe is not None:
         if pe < 0:
-            signals.append(("PE(TTM)", f"{pe:.1f}x", "⚫亏损"))
+            is_loss = True
+            signals.append(("PE(TTM)", f"{pe:.1f}x", "🔴亏损"))
         elif pe < 15:
             signals.append(("PE(TTM)", f"{pe:.1f}x", "🟢低估"))
         elif pe < 30:
@@ -324,8 +353,26 @@ def _valuation_conclusion(result):
         else:
             signals.append(("PE(TTM)", f"{pe:.1f}x", "🔴偏高"))
 
+    ps = cur.get("ps_ttm")
+    if ps is not None and ps > 0 and is_loss:
+        if ps < 2:
+            signals.append(("PS(TTM)", f"{ps:.1f}x", "🟢低PS"))
+        elif ps < 5:
+            signals.append(("PS(TTM)", f"{ps:.1f}x", "🟡合理PS"))
+        else:
+            signals.append(("PS(TTM)", f"{ps:.1f}x", "🔴高PS"))
+
+    pb = cur.get("pb") or cur.get("pb_mrq")
+    if pb is not None and pb > 0 and is_loss:
+        if pb < 1.5:
+            signals.append(("PB", f"{pb:.1f}x", "🟢低PB"))
+        elif pb < 3:
+            signals.append(("PB", f"{pb:.1f}x", "🟡合理PB"))
+        else:
+            signals.append(("PB", f"{pb:.1f}x", "🔴高PB"))
+
     pct_3y = pct.get("pe_hist_3y_pct")
-    if pct_3y is not None:
+    if pct_3y is not None and not is_loss:
         if pct_3y < 30:
             signals.append(("历史3年分位", f"{pct_3y:.0f}%", "🟢低于30%分位"))
         elif pct_3y > 70:
@@ -346,7 +393,16 @@ def _valuation_conclusion(result):
 
     bullish = sum(1 for s in signals if "🟢" in s[2])
     bearish = sum(1 for s in signals if "🔴" in s[2])
-    overall = "🟢 估值偏低" if bullish > bearish else ("🔴 估值偏高" if bearish > bullish else "🟡 估值合理")
+    if is_loss:
+        overall = "⚫ 亏损公司估值（参考PS/PB/DCF）" if bullish >= bearish else "🔴 亏损且DCF显示高估"
+        if bearish > bullish:
+            overall = "🔴 亏损且多项指标偏高"
+        elif bullish > bearish:
+            overall = "🟡 亏损但PS/PB/DCF显示估值尚可"
+        else:
+            overall = "🟡 亏损公司，估值需结合PS/PB/DCF综合判断"
+    else:
+        overall = "🟢 估值偏低" if bullish > bearish else ("🔴 估值偏高" if bearish > bullish else "🟡 估值合理")
 
     return {"overall": overall, "signals": signals}
 
@@ -445,3 +501,12 @@ if __name__ == "__main__":
     stock = sys.argv[1] if len(sys.argv) > 1 else "600519"
     data = fetch_valuation(stock, data_dir="output/test")
     print(format_markdown(data))
+
+
+def generate_report_section(data: dict) -> list:
+    if not data:
+        return []
+    md = format_markdown(data)
+    if md.startswith("## "):
+        md = md.split('\n', 1)[1]
+    return ["\n## 估值分析\n\n", md]

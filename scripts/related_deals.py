@@ -289,3 +289,41 @@ if __name__ == '__main__':
     print(f"资本运作: {result['count']}项")
     for d in result['deals']:
         print(f"  {d['date']} [{d['type']}] {d['title'][:60]}")
+
+
+def generate_report_section(data: dict) -> list:
+    lines = []
+    lines.append("## 关联方资本运作")
+    lines.append("")
+    lines.append(f"**资本运作总数**: {data.get('count', 0)}项")
+    lines.append("")
+
+    deals = data.get('deals', [])
+    if deals:
+        lines.append("**运作明细**:")
+        for d in deals:
+            risk = f" ⚠️ {d.get('risk','')}" if d.get('risk') else ''
+            lines.append(f"- **{d.get('date','')}** [{d.get('type','')}] {d.get('title','')[:70]}{risk}")
+        lines.append("")
+
+    go_private = data.get('go_private', [])
+    if go_private:
+        lines.append("**⚠️ 港股私有化**:")
+        for gp in go_private:
+            lines.append(f"- **{gp.get('date','')}** {gp.get('title','')[:80]}")
+            if gp.get('offeror'):
+                lines.append(f"  - 要约人/收购方: {gp['offeror']}")
+            if gp.get('advisor'):
+                lines.append(f"  - 财务顾问: {gp['advisor']}")
+            if gp.get('deadline'):
+                lines.append(f"  - 截止日期: {gp['deadline']}")
+        lines.append("")
+
+    summary = data.get('summary', {})
+    if summary.get('by_type'):
+        lines.append("**类型统计**:")
+        for t, cnt in summary['by_type'].items():
+            lines.append(f"- {t}: {cnt}项")
+        lines.append("")
+
+    return lines

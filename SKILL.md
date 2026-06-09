@@ -50,6 +50,7 @@ python analyze.py --stock 002180 --dims multi_year_trend,valuation,governance
 | 实时行情 | `quote` | 当前股价、涨跌幅、成交量 |
 | 年报PDF | `annual_pdf` | 下载+提取年报全文关键章节（**新增诉讼详情+客户供应商章节扩展**）|
 | 联网搜索 | `websearch` | 从CNINFO搜索年报PDF链接 |
+| **价值链分析** | `value_chain` | **NEW** 上/中/下游价值链分析、供应商集中度、产能利用率、客户集中度、评分0-100 |
 
 **年报PDF章节覆盖（共22章节，新增2个）**：
 - 原有20章：审计意见、利润分配、前五客户、前五供应商、实际控制人、前十股东、或有事项、日后事项、重大诉讼、研发投入、产销量、产能、主要子公司、担保、在建工程、商誉、长期股权投资、政府补助、新设子公司、换所
@@ -112,6 +113,35 @@ python analyze.py --stock 002180 --dims multi_year_trend,valuation,governance
 - 北向资金：持股数量/占流通股/趋势判断
 - 股东户数趋势：筹码集中/分散信号
 - 机构持仓明细：基金/保险/社保/信托/券商
+
+### 价值链分析（value_chain） ← NEW
+- **上游分析**：供应商集中度（前五占比）、关联交易供应商占比、原材料成本占比、议价能力评估
+- **中游分析**：产能利用率、技术壁垒、研发投入强度、Capex强度
+- **下游分析**：客户集中度（前五占比）、销售模式（直销/经销）、渠道掌控力、品牌溢价指数
+- **综合评分**：0-100分，🟢强(≥70) / 🟡中(50-69) / 🔴弱(<50)
+
+**使用方法**：
+```bash
+# 单独运行价值链分析
+python scripts/value_chain_analysis.py 002180 a output/002180_20260530/data
+
+# 指定维度分析
+python analyze.py --stock 002180 --dims value_chain
+```
+
+**Python调用**：
+```python
+from scripts.value_chain_analysis import ValueChainAnalyzer, fetch_value_chain
+
+# 方式1：直接调用
+result = fetch_value_chain('002180', 'a', data_dir)
+
+# 方式2：使用分析器
+analyzer = ValueChainAnalyzer(annual_sections, financials)
+report = analyzer.analyze()
+print(report['summary'])
+print(f"评分：{report['value_chain_score']}/100")
+```
 
 ---
 
@@ -296,6 +326,132 @@ with ThsdkSearch() as ts:
 - 美股买1/卖1价量在游客模式下返回int32最大值（无效）
 - 美股depth/call_auction超时不可用
 - 正式账号配置：`THS({'username': '...', 'password': '...', 'mac': '...'})`
+
+---
+
+## TDX 数据源（通达信官方API — 公司信息+股本结构+高管+资金流向+热点题材）
+
+**文件**：`scripts/tdx_provider.py`
+
+**用途**：公司基本信息（完整公司介绍/产品构成/行业/高管）、股本结构（历史总股本/流通股本/限售股变动）、董监高信息、资金流向、热点题材板块族谱等
+
+**API地址**：`http://tdxhub.icfqs.com:7615/TQLEX`
+
+**Token配置**：代码中内置了测试Token（`TDX-60c8102255a6ce8f611560c82896f36d`）
+
+### 核心能力
+
+| 信息类型 | 说明 | 返回字段 |
+|----------|------|---------|
+| **公司基本信息** | 公司名称/注册地/主营业务/高管/审计机构/联系方式/公司简介/经营范围等 | 35+字段，含产品构成（如茅台酒84%+系列酒14%） |
+| **股本结构** | 历史总股本/流通股本/限售股本变动（2018年至今） | 日期/总股本/流通股本/限售股本 |
+| **高管信息** | 董事/监事/高级管理人员 | 姓名/职务/任职日期 |
+| **资金流向** | 主力资金净流入/流出情况 | 金额/方向 |
+| **热点题材** | 公司所属概念板块/主题投资机会 | 题材/板块代码 |
+
+### CLI 使用
+
+```bash
+# 公司基本信息（含产品构成、高管、简介）
+python scripts/tdx_provider.py 600519 basic
+
+# 股本结构
+python scripts/tdx_provider.py 600519 gbjg
+
+# 股本变动历史
+python scripts/tdx_provider.py 600519 gbbd
+
+# 限售股解禁时间
+python scripts/tdx_provider.py 600519 xslt
+
+# 董监高信息
+python scripts/tdx_provider.py 600519 executives
+
+# 资金流向
+python scripts/tdx_provider.py 600519 zjlx
+
+# 涨停分析
+python scripts/tdx_provider.py 600519 ztfx
+
+# 热点题材
+python scripts/tdx_provider.py 600519 zttzbkz
+
+# 综合信息（一次性获取全部）
+python scripts/tdx_provider.py 600519 overview
+```
+
+### Python 调用
+
+```python
+from scripts.tdx_provider import tdxp
+
+# 公司基本信息（含产品构成）
+info = tdxp.company_info('600519', 'basic')
+print(info['company_name'])           # 贵州茅台酒股份有限公司
+print(info['main_business'])          # 茅台酒及系列酒的生产与销售
+print(info['controlling_shareholder']) # 中国贵州茅台酒厂（集团）有限责任公司
+print(info['chairman'])               # 陈华
+print(info['registered_capital'])     # 125008.1601 万元
+print(info['employee_count'])         # 34992 人
+
+# 股本结构（历史变动）
+structure = tdxp.share_structure('600519', 'gbjg')
+for item in structure['data']:
+    print(f"{item['T002']}: 总股本={item['T003']}, 流通股本={item['N010']}")
+
+# 资金流向
+capital = tdxp.trading_info('600519', 'zjlx')
+for flow in capital['data']:
+    print(f"{flow.get('date', '')}: 主力净流入={flow.get('main_net_inflow', '')}")
+
+# 热点题材
+topics = tdxp.trading_info('600519', 'zttzbkz')
+for topic in topics['data']:
+    print(f"题材: {topic.get('topic_name', topic.get('T002', ''))}")
+
+# 简化接口
+from scripts.tdx_provider import get_company_info, get_share_structure, get_trading_info
+info = get_company_info('600519', 'basic')
+structure = get_share_structure('600519', 'gbjg')
+trading = get_trading_info('600519', 'zjlx')
+```
+
+### 在分析流程中的位置
+
+在 `analyze.py` 中，通达信数据源作为 **第19步（最后一步）** 运行，补充以下维度的高质量数据：
+
+- **公司信息**：补充更完整的公司介绍、产品构成、审计机构、联系方式等
+- **股本结构**：补充历史股本变动，验证融资/扩股情况
+- **高管信息**：补充董监高背景，与第7步的"高管动态"交叉验证
+- **资金流向**：补充近期资金流入流出，与第8步的"资金动作"对比分析
+- **热点题材**：补充所属概念板块，与第13步的"行业竞争"对比
+
+### 与其他数据源的对比
+
+| 数据维度 | 东方财富/巨潮 | THSDK | Tushare | **通达信TDX** |
+|---------|--------------|-------|---------|----------------|
+| **公司简介** | 短摘要 | 有限 | 基础 | **详尽（公司介绍/产品/行业/高管）** |
+| **股本结构** | 近期 | 实时 | 历史 | **完整历史（2018至今）** |
+| **高管信息** | 有限 | 有限 | 基础 | **完整董监高** |
+| **资金流向** | 基础 | **详细** | 无 | 专题数据 |
+| **热点题材** | 基础 | 概念板块 | 无 | **专题族谱** |
+| **审计机构** | 年报中提取 | 无 | 无 | **直接返回** |
+| **联系方式** | 有限 | 无 | 基础 | **完整（电话/邮箱/地址）** |
+
+### 缓存机制
+
+- **基本信息**：24小时缓存（`~/.qclaw/cache/tdx/`）
+- **股本结构**：24小时缓存
+- **交易信息**：2小时缓存（资金流向/热点题材等实时性数据）
+- **缓存key**：`tdx_{code}_{type}.json`
+
+### 限制
+
+- 仅支持**A股**（市场代码为沪市6位代码或深市6位代码）
+- Token内置但可能有频率限制（0.5秒/次）
+- 部分API参数固定为特定值（固定查询）
+- 非实时行情数据（主要用于公司基本面/结构信息）
+- 如需实时行情，仍推荐使用 THSDK（第1步实时行情）
 
 ---
 

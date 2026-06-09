@@ -48,18 +48,45 @@ def fetch_investor_qa(stock_code, market="a", data_dir=None, raw_announcements=N
         "001002005001002": "路演/其他IR",
     }
 
+    # 标题关键词匹配（当 column_code 不可用时的降级方案）
+    SURVEY_KEYWORDS = ["调研", "接待", "投资者关系活动记录表", "机构调研", "投资者关系管理信息"]
+    ROADSHOW_KEYWORDS = ["路演", "业绩说明会", "业绩发布会", "投资者交流会"]
+    IR_KEYWORDS = ["投资者关系", "投资者开放日", "投资者接待"]
+
+    def _match_by_title(title):
+        """通过标题关键词判断类型"""
+        for kw in SURVEY_KEYWORDS:
+            if kw in title:
+                return "survey"
+        for kw in ROADSHOW_KEYWORDS:
+            if kw in title:
+                return "roadshow"
+        for kw in IR_KEYWORDS:
+            if kw in title:
+                return "ir"
+        return None
+
     # 分类
     ir_activities = []
     survey_records = []
     roadshow_records = []
 
     for ann in all_anns:
+        title = ann.get("title", "")
         cols = ann.get("columns", [])
-        codes = {c.get("column_code", ""): c.get("column_name", "") for c in cols}
+        codes = {c.get("column_code", ""): c.get("column_name", "") for c in cols} if cols else {}
 
-        is_ir = any(code in IR_ACTIVITY_CODES for code in codes)
-        is_survey = "001003001001004" in codes  # 公司调研
-        is_roadshow = "001002005001002" in codes
+        # 优先用 column_code，不可用时降级为标题关键词
+        has_column_code = bool(cols)
+        if has_column_code:
+            is_ir = any(code in IR_ACTIVITY_CODES for code in codes)
+            is_survey = "001003001001004" in codes
+            is_roadshow = "001002005001002" in codes
+        else:
+            match_type = _match_by_title(title)
+            is_survey = match_type == "survey"
+            is_roadshow = match_type == "roadshow"
+            is_ir = match_type in ("ir", "survey", "roadshow")
 
         if is_ir:
             ir_activities.append(_build_ir_record(ann, codes))
@@ -88,9 +115,8 @@ def fetch_investor_qa(stock_code, market="a", data_dir=None, raw_announcements=N
 
 def _build_ir_record(ann, codes):
     """构建IR活动记录"""
-    # 提取标题中的关键信息
     title = ann.get("title", "")
-    notice_date = ann.get("notice_date", ann.get("announcementTime", ""))[:10]
+    notice_date = ann.get("notice_date", ann.get("announcementTime", ann.get("date", "")))[:10]
 
     # 识别活动类型
     activity_type = codes.get("001003001001003") or codes.get("001003001001004") or codes.get("001002005001002") or "IR活动"
@@ -118,7 +144,7 @@ def _build_ir_record(ann, codes):
 def _build_survey_record(ann):
     """构建调研记录（格式与机构调研一致）"""
     title = ann.get("title", "")
-    notice_date = ann.get("notice_date", ann.get("announcementTime", ""))[:10]
+    notice_date = ann.get("notice_date", ann.get("announcementTime", ann.get("date", "")))[:10]
 
     # 尝试从标题提取参与机构
     # 常见格式: "XXX:关于XXX接待机构投资者调研活动的公告"
@@ -138,7 +164,7 @@ def _build_survey_record(ann):
 def _build_roadshow_record(ann):
     """构建路演/业绩说明记录"""
     title = ann.get("title", "")
-    notice_date = ann.get("notice_date", ann.get("announcementTime", ""))[:10]
+    notice_date = ann.get("notice_date", ann.get("announcementTime", ann.get("date", "")))[:10]
 
     return {
         "date": notice_date,
@@ -315,3 +341,139 @@ if __name__ == "__main__":
     data = fetch_investor_qa(stock, raw_announcements=None)
     print(format_markdown(data))
     print("\n使用方法: 在 analyze.py 中，investor_qa 模块会自动接收 announcements 的原始数据")
+
+
+def _generate_investor_ai_narrative(data):
+    """生成投资者互动AI综合解读"""
+    ir = data.get("ir_activities", [])
+    surveys = data.get("survey_records", [])
+    roadshows = data.get("roadshow_records", [])
+    smry = data.get("summary", {})
+
+    if not ir and not surveys and not roadshows:
+        return ""
+
+    evidence_parts = []
+    evidence_parts.append(f"机构关注度: {smry.get('institutional_attention', '数据不足')}")
+    evidence_parts.append(f"近12月调研次数: {smry.get('survey_count_12m', 0)}次")
+    evidence_parts.append(f"近12月IR活动: {smry.get('ir_activity_count_12m', 0)}次")
+    evidence_parts.append(f"近12月路演/业绩会: {smry.get('roadshow_count_12m', 0)}次")
+    evidence_parts.append(f"参与机构数: {smry.get('unique_institutions', 0)}家")
+
+    if surveys:
+        evidence_parts.append(f"\n机构调研记录({len(surveys)}条):")
+        for s in surveys[:8]:
+            evidence_parts.append(f"  {s.get('date', '')} {s.get('organizers', '')[:30]} - {s.get('theme', '')[:40]}")
+
+    if roadshows:
+        evidence_parts.append(f"\n路演/业绩说明会({len(roadshows)}条):")
+        for r in roadshows[:5]:
+            evidence_parts.append(f"  {r.get('date', '')} [{r.get('type', '')}] {r.get('title', '')[:50]}")
+
+    evidence_block = '\n'.join(evidence_parts)
+
+    prompt = f"""以下是某上市公司投资者互动数据，请写一段专业的投资者关系分析（200-400字）。
+
+要求：
+1. 分析机构关注度水平（高/中/低）
+2. 评估调研频率和参与机构质量
+3. 关注业绩说明会和路演的主要议题
+4. 分析投资者关系管理的积极程度
+5. 语言专业、客观
+
+===== 投资者互动数据 =====
+{evidence_block}
+===== 数据结束 =====
+
+请输出投资者关系分析："""
+
+    try:
+        from scripts.llm_config import call_llm
+        narrative = call_llm(
+            system_prompt="你是一位顶级券互联网行业分析师，擅长解读上市公司投资者关系管理。",
+            user_prompt=prompt,
+            max_tokens=2048,
+        )
+        if narrative and len(narrative) > 100:
+            return narrative
+    except Exception as e:
+        print(f"  [投资者互动AI解读] LLM调用失败: {e}")
+
+    return ""
+
+
+def build_evidence(data, findings=None):
+    """构建投资者互动证据块"""
+    ir = data.get("ir_activities", [])
+    surveys = data.get("survey_records", [])
+    roadshows = data.get("roadshow_records", [])
+    smry = data.get("summary", {})
+    if not ir and not surveys and not roadshows:
+        return ""
+    parts = [
+        f"机构关注度: {smry.get('institutional_attention', '数据不足')}",
+        f"近12月调研次数: {smry.get('survey_count_12m', 0)}次",
+        f"近12月IR活动: {smry.get('ir_activity_count_12m', 0)}次",
+        f"近12月路演/业绩会: {smry.get('roadshow_count_12m', 0)}次",
+        f"参与机构数: {smry.get('unique_institutions', 0)}家",
+    ]
+    if surveys:
+        parts.append(f"机构调研记录({len(surveys)}条):")
+        for s in surveys[:8]:
+            parts.append(f"  {s.get('date', '')} {s.get('organizers', '')[:30]} - {s.get('theme', '')[:40]}")
+    if roadshows:
+        parts.append(f"路演/业绩说明会({len(roadshows)}条):")
+        for r in roadshows[:5]:
+            parts.append(f"  {r.get('date', '')} [{r.get('type', '')}] {r.get('title', '')[:50]}")
+    return '\n'.join(parts)
+
+
+def generate_report_section(data: dict, batch_analysis=None) -> list:
+    if not data:
+        return []
+
+    lines = []
+    lines.append("## 投资者互动")
+    lines.append("")
+
+    smry = data.get("summary", {})
+    lines.append(f"**机构关注度**: {smry.get('institutional_attention', '数据不足')}")
+    lines.append(f"**近12月调研次数**: {smry.get('survey_count_12m', 0)}次 | **参与机构数**: {smry.get('unique_institutions', 0)}家")
+    lines.append("")
+
+    ai_narrative = ""
+    if batch_analysis and batch_analysis.get('investor'):
+        ai_narrative = batch_analysis['investor']
+    else:
+        ai_narrative = _generate_investor_ai_narrative(data)
+
+    if ai_narrative:
+        lines.append("### 🤖 AI投资者关系分析")
+        lines.append("")
+        lines.append(ai_narrative)
+        lines.append("")
+
+    surveys = data.get("survey_records", [])
+    if surveys:
+        lines.append("### 机构调研记录")
+        lines.append("")
+        lines.append('<table class="investor-table"><thead><tr><th>日期</th><th>参与机构</th><th>调研主题</th></tr></thead><tbody>')
+        for s in surveys[:15]:
+            org = s.get("organizers", "机构投资者")[:25]
+            theme = s.get("theme", s.get("title", ""))[:40]
+            lines.append(f'<tr><td>{s.get("date", "?")}</td><td>{org}</td><td>{theme}</td></tr>')
+        lines.append('</tbody></table>')
+        lines.append("")
+
+    roadshows = data.get("roadshow_records", [])
+    if roadshows:
+        lines.append("### 路演与业绩说明会")
+        lines.append("")
+        lines.append('<table class="investor-table"><thead><tr><th>日期</th><th>类型</th><th>标题</th></tr></thead><tbody>')
+        for r in roadshows[:10]:
+            title = r.get("title", "")[:50]
+            lines.append(f'<tr><td>{r.get("date", "?")}</td><td>{r.get("type", "路演")}</td><td>{title}</td></tr>')
+        lines.append('</tbody></table>')
+        lines.append("")
+
+    return lines

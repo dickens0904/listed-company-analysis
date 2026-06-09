@@ -144,3 +144,179 @@ if __name__ == '__main__':
     print(f"股权激励: {result['summary']['total_incentives']}条")
     for c in result['changes'][:5]:
         print(f"  {c['date']} [{c['type']}] {c['title'][:60]}")
+
+
+def _generate_executive_ai_narrative(data):
+    """生成高管动态AI综合解读"""
+    changes = data.get('changes', [])
+    incentives = data.get('equity_incentives', [])
+    summary = data.get('summary', {})
+
+    if not changes and not incentives:
+        return ""
+
+    evidence_parts = []
+    evidence_parts.append(f"高管变动总数: {len(changes)}条")
+
+    type_counts = {}
+    for c in changes:
+        t = c.get('type', '其他')
+        type_counts[t] = type_counts.get(t, 0) + 1
+    evidence_parts.append(f"变动类型分布: {type_counts}")
+
+    for c in changes[:10]:
+        evidence_parts.append(f"{c.get('date', '')[:10]} [{c.get('type', '')}] {c.get('title', '')[:60]}")
+
+    if incentives:
+        evidence_parts.append(f"\n股权激励事项: {len(incentives)}条")
+        for i in incentives[:5]:
+            evidence_parts.append(f"{i.get('date', '')[:10]} [{i.get('type', '')}] {i.get('title', '')[:60]}")
+
+    if summary.get('warnings'):
+        evidence_parts.append(f"\n风险提示: {'; '.join(summary['warnings'][:3])}")
+
+    evidence_block = '\n'.join(evidence_parts)
+
+    prompt = f"""以下是某上市公司高管变动数据，请写一段专业的高管动态分析（200-400字）。
+
+要求：
+1. 分析高管变动频率和类型（辞职/聘任/换届）
+2. 评估变动对公司治理的影响
+3. 关注是否存在异常信号（如集中辞职、核心高管离职）
+4. 如有股权激励，分析激励力度和覆盖面
+5. 语言专业、客观
+
+===== 高管数据 =====
+{evidence_block}
+===== 数据结束 =====
+
+请输出高管动态分析："""
+
+    try:
+        from scripts.llm_config import call_llm
+        narrative = call_llm(
+            system_prompt="你是一位顶级券商公司治理分析师，擅长解读上市公司高管变动背后的信号。",
+            user_prompt=prompt,
+            max_tokens=2048,
+        )
+        if narrative and len(narrative) > 100:
+            return narrative
+    except Exception as e:
+        print(f"  [高管AI解读] LLM调用失败: {e}")
+
+    return ""
+
+
+def build_evidence(data, findings=None):
+    """构建高管变动证据块"""
+    changes = data.get('changes', [])
+    incentives = data.get('equity_incentives', [])
+    summary = data.get('summary', {})
+    tdx_execs = data.get('tdx_executives', [])
+    if not changes and not incentives and not tdx_execs:
+        return ""
+    parts = [f"高管变动总数: {len(changes)}条"]
+    type_counts = {}
+    for c in changes:
+        t = c.get('type', '其他')
+        type_counts[t] = type_counts.get(t, 0) + 1
+    parts.append(f"变动类型分布: {type_counts}")
+    for c in changes[:10]:
+        parts.append(f"{c.get('date', '')[:10]} [{c.get('type', '')}] {c.get('title', '')[:60]}")
+    if incentives:
+        parts.append(f"股权激励事项: {len(incentives)}条")
+        for i in incentives[:5]:
+            parts.append(f"{i.get('date', '')[:10]} [{i.get('type', '')}] {i.get('title', '')[:60]}")
+    if summary.get('warnings'):
+        parts.append(f"风险提示: {'; '.join(summary['warnings'][:3])}")
+    # 通达信高管增强数据
+    if tdx_execs:
+        parts.append(f"\n【通达信高管数据】核心管理团队 {len(tdx_execs)} 人:")
+        for ex in tdx_execs[:12]:
+            name = ex.get('name', '')
+            pos = ex.get('position', '')
+            salary = ex.get('salary', '')
+            shares = ex.get('shares_held_total', '')
+            edu = ex.get('education', '')
+            salary_str = f'薪酬{salary}万' if salary not in ['', None] else ''
+            shares_str = f'持股{shares}股' if shares not in ['', None] else ''
+            edu_str = f'学历{edu}' if edu else ''
+            parts.append(f"  {name}（{pos}）{salary_str} {shares_str} {edu_str}")
+    return '\n'.join(parts)
+
+
+def generate_report_section(data: dict, batch_analysis=None) -> list:
+    lines = []
+    lines.append("## 高管动态")
+    lines.append("")
+
+    changes = data.get('changes', [])
+    summary = data.get('summary', {})
+
+    lines.append(f"**高管变动总数**: {len(changes)}条")
+    lines.append("")
+
+    ai_narrative = ""
+    if batch_analysis and batch_analysis.get('executives'):
+        ai_narrative = batch_analysis['executives']
+    else:
+        ai_narrative = _generate_executive_ai_narrative(data)
+
+    if ai_narrative:
+        lines.append("### 🤖 AI高管动态分析")
+        lines.append("")
+        lines.append(ai_narrative)
+        lines.append("")
+
+    if summary.get('warnings'):
+        lines.append("### ⚠️ 风险提示")
+        lines.append("")
+        for w in summary['warnings']:
+            lines.append(f"- {w}")
+        lines.append("")
+
+    if changes:
+        lines.append("### 变动明细")
+        lines.append("")
+        lines.append('<table class="exec-table"><thead><tr><th>日期</th><th>类型</th><th>详情</th></tr></thead><tbody>')
+        for c in changes[:15]:
+            lines.append(f'<tr><td>{c.get("date","")[:10]}</td><td>{c.get("type","")}</td><td>{c.get("title","")[:60]}</td></tr>')
+        lines.append('</tbody></table>')
+        lines.append("")
+
+    incentives = data.get('equity_incentives', [])
+    if incentives:
+        lines.append("### 股权激励事项")
+        lines.append("")
+        lines.append('<table class="exec-table"><thead><tr><th>日期</th><th>类型</th><th>详情</th></tr></thead><tbody>')
+        for i in incentives[:10]:
+            lines.append(f'<tr><td>{i.get("date","")[:10]}</td><td>{i.get("type","")}</td><td>{i.get("title","")[:60]}</td></tr>')
+        lines.append('</tbody></table>')
+        lines.append("")
+
+    # 通达信高管增强数据
+    tdx_execs = data.get('tdx_executives', [])
+    if tdx_execs:
+        lines.append("### 核心管理团队（通达信）")
+        lines.append("")
+        lines.append("| 姓名 | 职务 | 任职日期 | 性别 | 学历 | 年龄 | 薪酬(万元) | 持股(股) |")
+        lines.append("|------|------|---------|------|------|------|-----------|---------|")
+        for ex in tdx_execs[:15]:
+            name = ex.get('name', '')
+            pos = ex.get('position', '')
+            start = ex.get('start_date', '')
+            gender = ex.get('gender', '')
+            edu = ex.get('education', '')
+            age = ex.get('age', '')
+            salary = ex.get('salary', '')
+            shares = ex.get('shares_held_total', '')
+            salary_str = str(salary) if salary not in ['', None] else '-'
+            shares_str = str(shares) if shares not in ['', None] else '-'
+            lines.append(f'| {name} | {pos} | {start} | {gender} | {edu} | {age} | {salary_str} | {shares_str} |')
+        if len(tdx_execs) > 15:
+            lines.append(f'| 其他 {len(tdx_execs) - 15} 人 | ... | ... | ... | ... | ... | ... | ... |')
+        lines.append("")
+        lines.append(f'*数据来源：通达信官方数据接口（TDX API），共 {len(tdx_execs)} 人*')
+        lines.append("")
+
+    return lines

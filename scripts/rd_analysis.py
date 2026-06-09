@@ -159,11 +159,11 @@ def _detect_asset_disposal(data_dir):
 
 
 def _get_annual_text(data_dir):
-    """获取年报文本，优先读txt（需验证非乱码），其次从PDF提取"""
+    """获取年报文本，优先读txt（需验证非乱码且长度充足），其次从PDF提取"""
     if not data_dir:
         return ''
 
-    # 尝试txt（需验证ASCII比例>40%，否则说明是乱码）
+    # 尝试txt（需验证ASCII比例>40%，否则说明是乱码；且长度>20000才算完整年报）
     for fname in ['annual_report_text.txt', 'annual_report_text_full.txt']:
         p = os.path.join(data_dir, fname)
         if os.path.exists(p):
@@ -175,7 +175,8 @@ def _get_annual_text(data_dir):
                 if ascii_ratio < 0.4:
                     continue  # 乱码，跳过
                 txt = raw.decode('utf-8', errors='replace')
-                if len(txt) > 1000:
+                # 完整年报通常>50页，文本>20000字；太短说明是截断版本
+                if len(txt) > 20000:
                     return txt
             except:
                 pass
@@ -514,8 +515,12 @@ def _get_rd_from_pdf(data_dir):
         return result
     result['raw_text_rd'] = text[:200]
 
-    # 研发费用（优先匹配“万元”，再匹配“元”）
+    # 研发费用（优先匹配跨行格式，再匹配同行格式）
     for pat in [
+        # 跨行格式：研发费用\n金额（元）
+        r'研发费用\s*\n\s*([\d,]+(?:\.\d+)?)\s*\n',
+        r'研发费用\s*\n\s*([\d,]+(?:\.\d+)?)\s*元',
+        # 同行格式：研发费用 金额 万元
         r'研发投入[^一-龥]{0,20}([\d,]+(?:\.\d+)?)\s*万元',
         r'研发费用[^一-龥]{0,20}([\d,]+(?:\.\d+)?)\s*万元',
         r'研发投入合计[^一-龥]{0,20}([\d,]+(?:\.\d+)?)\s*万元',
@@ -526,11 +531,15 @@ def _get_rd_from_pdf(data_dir):
         if m:
             try:
                 val = float(m.group(1).replace(',', ''))
-                # 判断是万元还是元：如果>1e8则大概率是“元”单位
+                # 判断单位：如果值>1e8或没有明确单位，则认为是“元”
                 if '万元' in pat:
                     result['rd_expense_亿'] = round(val / 10000, 2)
                 else:
-                    result['rd_expense_亿'] = round(val / 1e8, 2)
+                    # 跨行匹配默认按元处理
+                    if val > 1e8:  # 超过1亿元则按元算
+                        result['rd_expense_亿'] = round(val / 1e8, 2)
+                    else:  # 否则按万元算
+                        result['rd_expense_亿'] = round(val / 10000, 2)
                 break
             except:
                 pass
@@ -813,3 +822,12 @@ def format_rd_analysis(data):
 
 # 向后兼容
 fetch_rd_decomposition = fetch_rd_analysis
+
+
+def generate_report_section(data: dict) -> list:
+    if not data or data.get('error'):
+        return []
+    md = format_rd_analysis(data)
+    if md.startswith("## "):
+        md = md.split('\n', 1)[1]
+    return ["\n## 研发与利润归因分析\n\n", md]

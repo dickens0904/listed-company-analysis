@@ -185,6 +185,42 @@ class CrossValidator:
         for sig in profit_signals:
             self.signals.append({**sig, 'category': '利润质量', 'type': '虚增利润'})
 
+        # --- 1.1b 资产处置/减值信号（补充虚增利润证据） ---
+        anns_p = self.findings.get('announcements', {})
+        disposal_anns = [a for a in anns_p.get('critical_announcements', []) + anns_p.get('major_announcements', [])
+                        if any(k in str(a.get('title', '')) for k in ['减值', '资产处置', '出售', '剥离'])]
+        if disposal_anns:
+            profit_signals_ext = []
+            for da in disposal_anns[:3]:
+                content = da.get('extracted_content', {})
+                facts = content.get('key_facts', []) if isinstance(content, dict) else []
+                detail = f"{da.get('date', '')[:10]} {da.get('title', '')[:50]}"
+                if facts:
+                    detail += f" | {facts[0][:60]}"
+                profit_signals_ext.append({
+                    'id': 'P1E', 'strength': 'medium',
+                    'dim': '公告-资产处置', 'detail': detail
+                })
+            for sig in profit_signals_ext:
+                self.signals.append({**sig, 'category': '利润质量', 'type': '虚增利润'})
+
+        # --- 1.1c 现金流持续低于净利润 ---
+        profit_series = trend.get('trend', {}).get('profit_series', [])
+        cf_series = trend.get('trend', {}).get('cf_series', [])
+        if len(profit_series) >= 3 and len(cf_series) >= 3:
+            mismatch_count = 0
+            for i in range(min(len(profit_series), len(cf_series))):
+                p_val = profit_series[i][1] if isinstance(profit_series[i], (list, tuple)) else profit_series[i]
+                c_val = cf_series[i][1] if isinstance(cf_series[i], (list, tuple)) else cf_series[i]
+                if p_val and c_val and p_val > 0 and c_val < p_val * 0.5:
+                    mismatch_count += 1
+            if mismatch_count >= 2:
+                self.signals.append({
+                    'id': 'P1F', 'strength': 'medium',
+                    'dim': '现金流/利润序列', 'detail': f'近{mismatch_count}年经营现金流显著低于净利润',
+                    'category': '利润质量', 'type': '虚增利润'
+                })
+
         # --- 1.2 报表洗澡 ---
         bath_signals = []
 
@@ -483,6 +519,41 @@ class CrossValidator:
                             'id': 'D1B', 'strength': 'strong',
                             'dim': '担保/净资产',
                             'detail': f'担保约{total_g:.1f}亿占净资产{g_ratio:.0%}，超50%警戒线'
+                        })
+
+        anns = self.findings.get('announcements', {})
+        ann_critical = anns.get('critical_announcements', [])
+        ann_major = anns.get('major_announcements', [])
+        guarantee_anns = [a for a in ann_critical + ann_major
+                         if '担保' in str(a.get('title', ''))]
+        if len(guarantee_anns) >= 5:
+            guarantee_signals.append({
+                'id': 'D1E', 'strength': 'medium',
+                'dim': '公告-担保',
+                'detail': f'近三年担保公告{len(guarantee_anns)}条，担保行为频繁'
+            })
+
+        guarantee_amount_total = 0
+        for ga in guarantee_anns[:20]:
+            content = ga.get('extracted_content', {})
+            if isinstance(content, dict):
+                for fact in content.get('key_facts', []):
+                    amounts = re.findall(r'(\d+(?:\.\d+)?)\s*亿', str(fact))
+                    for a in amounts:
+                        try: guarantee_amount_total += float(a)
+                        except: pass
+        if guarantee_amount_total > 0:
+            fin_records = financial.get('records', [])
+            if fin_records:
+                total_equity = self._sf(fin_records[0].get('TOTAL_PARENT_EQUITY'))
+                if total_equity and total_equity > 0:
+                    eq_yi = total_equity / 1e8
+                    g_ratio = guarantee_amount_total / eq_yi
+                    if g_ratio > 0.3:
+                        guarantee_signals.append({
+                            'id': 'D1F', 'strength': 'strong' if g_ratio > 0.5 else 'medium',
+                            'dim': '公告担保金额/净资产',
+                            'detail': f'公告中提取担保金额约{guarantee_amount_total:.1f}亿，占净资产{g_ratio:.0%}'
                         })
 
         for sig in guarantee_signals:
@@ -840,6 +911,8 @@ class CrossValidator:
                 f"{'应收账款异常增长，' if any(s['id'] == 'P1B' for s in sigs) else ''}"
                 f"{'毛利率显著偏离同行，' if any(s['id'] == 'P1C' for s in sigs) else ''}"
                 f"{'审计意见非标，' if any(s['id'] == 'P1D' for s in sigs) else ''}"
+                f"{'存在大额资产处置/减值，' if any(s['id'] == 'P1E' for s in sigs) else ''}"
+                f"{'多年经营现金流显著低于净利润，' if any(s['id'] == 'P1F' for s in sigs) else ''}"
                 f"建议深入核查收入确认政策和回款情况。",
 
             ('利润质量', '报表洗澡'):
@@ -883,6 +956,8 @@ class CrossValidator:
             ('隐藏负债', '表外担保'):
                 f"**表外担保风险**（{level}）："
                 f"关联担保频繁，可能存在大量表外负债。"
+                f"{'担保公告数量多，' if any(s['id'] == 'D1E' for s in sigs) else ''}"
+                f"{'公告担保金额占净资产比例高，' if any(s['id'] == 'D1F' for s in sigs) else ''}"
                 f"一旦被担保方违约，上市公司将面临连带清偿风险。",
 
             ('隐藏负债', '隐性杠杆'):
@@ -1188,3 +1263,39 @@ if __name__ == '__main__':
     with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(result, f, ensure_ascii=False, indent=2, default=str)
     print(f"\n结果已保存: {out_path}")
+
+
+def generate_report_section(data: dict) -> list:
+    lines = []
+    lines.append("## 跨维度交叉验证：隐情发现")
+    lines.append("")
+
+    summary = data.get('summary', {})
+    score = summary.get('score', 0)
+    overall = summary.get('overall', '未知')
+    lines.append(f"**隐情评分**: {score}/100 | {overall}")
+    lines.append("")
+    lines.append(f"> 每条隐情均由≥2个独立维度信号支撑。隐情发现不等同于事实认定，仅为投资研究参考。")
+    lines.append("")
+
+    hidden_truths = data.get('hidden_truths', [])
+    if not hidden_truths:
+        lines.append(f"🟢 **暂无重大隐情** — 各维度交叉验证未发现显著异常组合。单维度预警请参考风险评级章节。")
+        lines.append("")
+        return lines
+
+    for t in hidden_truths:
+        lines.append(f"### {t['level']} {t['category']} → {t['type']}")
+        lines.append("")
+        lines.append(t.get('narrative', ''))
+        lines.append("")
+        lines.append(f"<details><summary>支撑信号（{t['signal_count']}个）</summary>")
+        lines.append("")
+        for sig in t.get('signals', []):
+            icon = {'strong': '🔴', 'medium': '🟠', 'weak': '🟡'}.get(sig['strength'], '⚪')
+            lines.append(f"- {icon} [{sig['dim']}] {sig['detail']}")
+        lines.append("")
+        lines.append(f"</details>")
+        lines.append("")
+
+    return lines

@@ -12,16 +12,16 @@ setup(
     python_requires='>=3.8',
     packages=find_packages(),
     install_requires=[
-        'requests>=2.25.0',
-        'pandas>=1.3.0',
-        'PyMuPDF>=1.23.0',
-        'akshare>=1.12.0',
-        'thsdk>=1.7.0',
+        'requests==2.33.1',
+        'pandas==3.0.2',
+        'PyMuPDF==1.27.2.2',
+        'akshare==1.18.53',
+        'thsdk==1.7.18',
     ],
     extras_require={
         'full': [
-            'pdfplumber>=0.10.0',
-            'matplotlib>=3.5.0',
+            'pdfplumber==0.11.9',
+            'matplotlib==3.10.8',
         ],
     },
     entry_points={

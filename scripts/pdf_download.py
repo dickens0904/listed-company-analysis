@@ -298,6 +298,9 @@ def get_annual_report_list(stock_code: str, company_name: str = None, years: int
         data['plate'] = 'sh'
     elif stock_code.startswith('0') or stock_code.startswith('3'):
         data['plate'] = 'sz'
+    elif stock_code.startswith('4') or stock_code.startswith('8') or stock_code.startswith('9'):
+        # BSE北交所股票 (40/80/92/83/87等) → plate='bj'
+        data['plate'] = 'bj'
 
     try:
         r = requests.post(url, data=data, headers=headers, timeout=15)
@@ -406,6 +409,11 @@ def _fetch_cninfo_reports(stock_code, company_name, cat_info, years=3):
     }
     if stock_code.startswith('6'):
         data['plate'] = 'sh'
+    elif stock_code.startswith('4') or stock_code.startswith('8') or stock_code.startswith('9'):
+        # BSE北交所股票 (40/80/83/87/92等) → plate='bj'
+        data['plate'] = 'bj'
+    else:
+        data['plate'] = 'sz'
 
     try:
         r = requests.post(url, data=data, headers=headers, timeout=15)
@@ -806,6 +814,7 @@ def download_and_extract(stock_code: str, company_name: str = None,
         'toc': extracted['toc'][:50],
         'sections': sections,
         'text_preview': text_preview,
+        'full_text': extracted['text'],
     }
 
 

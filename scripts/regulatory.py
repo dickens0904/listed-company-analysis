@@ -118,3 +118,115 @@ if __name__ == '__main__':
     print(f"监管记录: {result['count']}条")
     for r in result['records']:
         print(f"  {r['date']} [{r['severity']}] {r['title'][:60]}")
+
+
+def _generate_regulatory_ai_narrative(data):
+    """生成监管合规AI综合解读"""
+    records = data.get('records', [])
+    if not records:
+        return ""
+
+    summary = data.get('summary', {})
+
+    evidence_parts = []
+    evidence_parts.append(f"监管记录总数: {len(records)}条")
+
+    if summary.get('by_severity'):
+        evidence_parts.append(f"严重程度分布: {summary['by_severity']}")
+    if summary.get('by_type'):
+        evidence_parts.append(f"监管类型分布: {summary['by_type']}")
+
+    severe = [r for r in records if '严重' in r.get('severity', '') or '风险' in r.get('severity', '')]
+    if severe:
+        evidence_parts.append(f"严重/高风险事项: {len(severe)}条")
+        for r in severe[:5]:
+            evidence_parts.append(f"  {r.get('date', '')} [{r.get('severity', '')}] {r.get('title', '')[:60]}")
+
+    for r in records[:10]:
+        evidence_parts.append(f"{r.get('date', '')} [{r.get('type', '')}] {r.get('title', '')[:60]}")
+
+    evidence_block = '\n'.join(evidence_parts)
+
+    prompt = f"""以下是某上市公司的监管记录数据，请写一段专业的监管合规分析（200-400字）。
+
+要求：
+1. 评估监管风险的整体水平和趋势
+2. 分析主要监管事项的性质和影响
+3. 关注严重/高风险事项的具体内容
+4. 评估合规治理的整体状况
+5. 提出投资者应关注的合规风险点
+
+{evidence_block}
+
+请输出监管合规分析："""
+
+    try:
+        from scripts.llm_config import call_llm
+        narrative = call_llm(
+            system_prompt="你是一位顶级券互联网合规分析师，擅长解读上市公司监管记录和合规风险。",
+            user_prompt=prompt,
+            max_tokens=2048,
+        )
+        if narrative and len(narrative) > 100:
+            return narrative
+    except Exception as e:
+        print(f"  [监管AI解读] LLM调用失败: {e}")
+
+    return ""
+
+
+def build_evidence(data, findings=None):
+    """构建监管数据证据块"""
+    records = data.get('records', [])
+    if not records:
+        return ""
+    summary = data.get('summary', {})
+    parts = [f"监管记录总数: {len(records)}条"]
+    if summary.get('by_severity'):
+        parts.append(f"严重程度分布: {summary['by_severity']}")
+    if summary.get('by_type'):
+        parts.append(f"监管类型分布: {summary['by_type']}")
+    severe = [r for r in records if '严重' in r.get('severity', '') or '风险' in r.get('severity', '')]
+    if severe:
+        parts.append(f"严重/高风险事项: {len(severe)}条")
+        for r in severe[:5]:
+            parts.append(f"  {r.get('date', '')} [{r.get('severity', '')}] {r.get('title', '')[:60]}")
+    for r in records[:10]:
+        parts.append(f"{r.get('date', '')} [{r.get('type', '')}] {r.get('title', '')[:60]}")
+    return '\n'.join(parts)
+
+
+def generate_report_section(data: dict, batch_analysis=None) -> list:
+    lines = []
+    lines.append("## 监管历史追溯")
+    lines.append("")
+    lines.append(f"**监管记录总数**: {data.get('count', 0)}条")
+    lines.append("")
+
+    ai_narrative = ""
+    if batch_analysis and batch_analysis.get('regulatory'):
+        ai_narrative = batch_analysis['regulatory']
+    else:
+        ai_narrative = _generate_regulatory_ai_narrative(data)
+
+    if ai_narrative:
+        lines.append("### 🤖 AI监管合规分析")
+        lines.append("")
+        lines.append(ai_narrative)
+        lines.append("")
+
+    summary = data.get('summary', {})
+    if summary.get('by_severity'):
+        lines.append("**严重程度分布**:")
+        for sev, cnt in summary['by_severity'].items():
+            lines.append(f"- {sev}: {cnt}条")
+        lines.append("")
+
+    records = data.get('records', [])
+    if records:
+        lines.append("**监管记录明细**:")
+        for r in records[:20]:
+            lines.append(f"- **{r.get('date','')}** {r.get('severity','')} [{r.get('type','')}] {r.get('title','')[:70]}")
+        lines.append("")
+
+    return lines
