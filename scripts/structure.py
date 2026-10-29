@@ -5,6 +5,10 @@
 数据源: AKShare + 公告解析
 """
 import sys, json, re
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 sys.stdout.reconfigure(encoding='utf-8')
 
 def _import_akshare():
@@ -435,6 +439,7 @@ def _fetch_actual_controller_em_f10(stock_code):
                     "no_controller": True,
                 }
     except Exception as e:
+        record_result(__name__, '_fetch_actual_controller_em_f10', e, note='静默降级')
         pass
     
     return None
@@ -478,6 +483,7 @@ def _fetch_actual_controller_ak(stock_code):
                         "control_type": str(row.get('控制类型', '')),
                     }
     except Exception as e:
+        record_result(__name__, '_fetch_actual_controller_ak', e, note='静默降级')
         pass
     
     # 3. 从公司简介获取
@@ -492,6 +498,7 @@ def _fetch_actual_controller_ak(stock_code):
                     "source": "公司简介",
                 }
     except Exception as e:
+        record_result(__name__, '_fetch_actual_controller_ak', e, note='静默降级')
         pass
     
     # 4. 从第一大股东推断
@@ -592,7 +599,8 @@ def _analyze_equity_penetration(stock_code, top_shareholders, actual_controller)
                             "source": source_label,
                             "stale": is_no_controller,
                         })
-        except Exception:
+        except Exception as _sexc:
+            record(__name__, '_analyze_equity_penetration', _sexc, note='静默降级')
             pass
     
     # 2. 如果中证信披无数据，使用东财F10/推断的实控人

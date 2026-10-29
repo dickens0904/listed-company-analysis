@@ -5,11 +5,16 @@ pdf_download.py - PDF 下载与提取模块
 + 上交所年报PDF下载（cookie反爬流程） + PyMuPDF 文本提取
 """
 import os
+import time
 import re
 import json
 import requests
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
 
 # ================================================================
@@ -186,6 +191,142 @@ def _is_bse_stock(stock_code: str) -> bool:
     return stock_code.startswith('8') or stock_code.startswith('9')
 
 
+def _get_bse_annual_from_em(stock_code: str, years: int = 3) -> List[Dict]:
+    """从东方财富公告接口取北交所年报 PDF（2026-10-21 新增，替代失效的 BSE 官网翻页）。
+
+    背景：BSE 官网 `initDisclosureList.do` 的 `companyCd` 被服务端忽略（实测无论传
+    companyCd/companyCode/stockCode，返回的都是全市场 636 页，首条=别家公司），
+    老代码翻 50 页也命中不了目标公司 → "未找到年报"。
+
+    东财通道：`np-anotice-stock/api/security/ann?stock_list=<920xxx>` → art_code
+    → `https://pdf.dfcfw.com/pdf/H2_<art_code>_1.pdf`（实测 200 / application/pdf）。
+
+    🔴 只认 920xxx 段：调用方须先用 bse_migrate.resolve_bse_code() 迁码。
+    """
+    reports: List[Dict] = []
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://data.eastmoney.com/',
+    }
+    try:
+        r = requests.get(
+            'https://np-anotice-stock.eastmoney.com/api/security/ann',
+            params={'sr': -1, 'page_size': 100, 'page_index': 1, 'ann_type': 'A',
+                    'client_source': 'web', 'stock_list': stock_code,
+                    'f_node': 0, 's_node': 0},
+            headers=headers, timeout=20,
+        )
+        items = ((r.json().get('data') or {}).get('list') or [])
+    except Exception as _e:
+        record(__name__, '_get_bse_annual_from_em', _e, note='静默降级')
+        return []
+
+    for it in items:
+        title = it.get('title') or ''
+        # 严格：年报全文（排除摘要 / 业绩说明会 / 预告 / 英文版 / 已取消）
+        if '年度报告' not in title:
+            continue
+        if any(k in title for k in ('摘要', '说明会', '预告', '英文', '已取消', '问询')):
+            continue
+        art = it.get('art_code') or ''
+        if not art:
+            continue
+        m = re.search(r'(20\d{2})\s*年\s*年度报告', title)
+        year = int(m.group(1)) if m else None
+        reports.append({
+            'year': year,
+            'title': title,
+            'pdf_url': f'https://pdf.dfcfw.com/pdf/H2_{art}_1.pdf',
+            'date': str(it.get('notice_date') or '')[:10],
+            'art_code': art,
+            'current_code': stock_code,
+            'source': 'em_announce_bse',
+        })
+
+    # 同年去重（保留最新一条）
+    dedup: Dict[int, Dict] = {}
+    for rp in reports:
+        y = rp.get('year')
+        if y not in dedup or str(rp.get('date', '')) > str(dedup[y].get('date', '')):
+            dedup[y] = rp
+    out = sorted(dedup.values(), key=lambda x: x.get('year') or 0, reverse=True)
+    # 若当年年报尚未披露，补一条最新半年报，避免"完全无 PDF"
+    return out[:years]
+
+
+def fetch_bse_notice_text(art_code: str, max_pages: int = None, sleep_sec: float = 0.15) -> Dict:
+    """东财公告「分页正文」→ 拼接全文（2026-10-21 新增）。
+
+    背景：东财 PDF（pdf.dfcfw.com）已被反爬，返回 985B `<script>` 页伪装成
+    application/pdf；但 `np-cnotice-stock/api/content/ann` 的 `notice_content`
+    是**真文本**（按 page_size 分页，实测 47 页）。年报 PDF 拿不到时用它兜底，
+    MD&A / 风险 / 审计意见文字仍可提取（图表、表格排版会丢）。
+
+    Returns: {'text','pages','chars','truncated'}
+    """
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+               'Referer': 'https://data.eastmoney.com/'}
+    api = 'https://np-cnotice-stock.eastmoney.com/api/content/ann'
+
+    def _page(i: int) -> Optional[str]:
+        try:
+            j = requests.get(api, params={'art_code': art_code, 'client_source': 'web',
+                                         'page_index': i}, headers=headers, timeout=25).json()
+            d = j.get('data') or {}
+            return d.get('notice_content') or ''
+        except Exception:
+            return None
+
+    first = _page(1)
+    if first is None:
+        return {'text': '', 'pages': 0, 'chars': 0, 'truncated': False}
+
+    try:
+        _meta = requests.get(api, params={'art_code': art_code, 'client_source': 'web',
+                                          'page_index': 1}, headers=headers, timeout=25).json()
+        total = int(((_meta.get('data') or {}).get('page_size') or 1))
+    except Exception:
+        total = 1
+    pages = min(total, max_pages) if max_pages else total
+
+    parts = [first]
+    for i in range(2, pages + 1):
+        t = _page(i)
+        if t:
+            parts.append(t)
+        time.sleep(sleep_sec)
+
+    text = '\n'.join(parts)
+    return {'text': text, 'pages': pages, 'chars': len(text),
+            'truncated': pages < total}
+
+
+def _bse_text_fallback(art_code: str, pdf_path: str, max_pages: int = 60) -> Optional[Dict]:
+    """年报 PDF 不可得时，把公告全文文本落盘为 `<stem>_fulltext.txt`。"""
+    if not art_code:
+        return None
+    try:
+        r = fetch_bse_notice_text(art_code, max_pages=max_pages)
+    except Exception as _e:
+        print(f"[WARN] 北交所公告全文抓取失败: {_e}")
+        return None
+    if not r.get('text'):
+        return None
+    stem = os.path.splitext(pdf_path)[0]
+    txt_path = f'{stem}_fulltext.txt'
+    try:
+        with open(txt_path, 'w', encoding='utf-8') as f:
+            f.write(r['text'])
+        print(f"[溯源] ✓ 已改用公告全文文本: {txt_path} "
+              f"({r['chars']} 字 / {r['pages']} 页"
+              f"{'·已截断' if r.get('truncated') else ''})")
+    except Exception as _e:
+        print(f"[WARN] 全文文本落盘失败: {_e}")
+        return None
+    return {'text_path': txt_path, 'chars': r['chars'], 'pages': r['pages'],
+            'truncated': r.get('truncated', False)}
+
+
 def _get_bse_annual_reports(stock_code: str, years: int = 3) -> List[Dict]:
     """
     从北交所(BSE)官网获取年报列表
@@ -207,7 +348,8 @@ def _get_bse_annual_reports(stock_code: str, years: int = 3) -> List[Dict]:
     # 获取session cookie
     try:
         session.get('https://www.bse.cn/disclosure/announcement.html', timeout=10)
-    except:
+    except Exception as _sexc:
+        record(__name__, '_get_bse_annual_reports', _sexc, note='静默降级')
         pass
 
     api_url = 'https://www.bse.cn/disclosureInfoController/initDisclosureList.do'
@@ -276,8 +418,8 @@ def get_annual_report_list(stock_code: str, company_name: str = None, years: int
     url = 'https://www.cninfo.com.cn/new/hisAnnouncement/query'
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'Referer': 'http://www.cninfo.com.cn/new/disclosure/stock',
-        'Origin': 'http://www.cninfo.com.cn',
+        'Referer': 'https://www.cninfo.com.cn/new/disclosure/stock',
+        'Origin': 'https://www.cninfo.com.cn',
         'X-Requested-With': 'XMLHttpRequest',
         'Content-Type': 'application/x-www-form-urlencoded',
     }
@@ -318,7 +460,7 @@ def get_annual_report_list(stock_code: str, company_name: str = None, years: int
                     reports.append({
                         'year': year,
                         'title': title,
-                        'pdf_url': f"http://static.cninfo.com.cn/{adj_url}",
+                        'pdf_url': f"https://static.cninfo.com.cn/{adj_url}",
                         'date': ann.get('announcementTime', ''),
                         'announcement_id': ann.get('announcementId', ''),
                     })
@@ -391,8 +533,8 @@ def _fetch_cninfo_reports(stock_code, company_name, cat_info, years=3):
     url = 'https://www.cninfo.com.cn/new/hisAnnouncement/query'
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'Referer': 'http://www.cninfo.com.cn/new/disclosure/stock',
-        'Origin': 'http://www.cninfo.com.cn',
+        'Referer': 'https://www.cninfo.com.cn/new/disclosure/stock',
+        'Origin': 'https://www.cninfo.com.cn',
         'X-Requested-With': 'XMLHttpRequest',
         'Content-Type': 'application/x-www-form-urlencoded',
     }
@@ -437,7 +579,7 @@ def _fetch_cninfo_reports(stock_code, company_name, cat_info, years=3):
                     reports.append({
                         'year': year,
                         'title': title_clean,
-                        'pdf_url': f"http://static.cninfo.com.cn/{adj_url}",
+                        'pdf_url': f"https://static.cninfo.com.cn/{adj_url}",
                         'date': ann.get('announcementTime', ''),
                         'announcement_id': ann.get('announcementId', ''),
                         'report_type': cat_info['label'],
@@ -477,7 +619,10 @@ def download_and_extract_periodic(stock_code: str, company_name: str = None,
             'summary': {...}
         }
     """
-    from scripts.safe_request import safe_get as _safe_get
+    try:
+        from safe_request import safe_get as _safe_get
+    except ImportError:
+        from scripts.safe_request import safe_get as _safe_get
 
     all_reports = get_periodic_report_list(stock_code, company_name, report_type, years)
     result = {'reports': {}, 'summary': {'total_downloaded': 0, 'errors': []}}
@@ -546,6 +691,71 @@ def _count_pages(pdf_path):
         return 0
 
 
+def _pdf_pages_text(pdf_path):
+    """fitz 分页文本 [(pno, text)]；fitz 不可用/异常返回 []"""
+    try:
+        import fitz
+        doc = fitz.open(pdf_path)
+        pages = [(i + 1, (doc[i].get_text() or '')) for i in range(len(doc))]
+        doc.close()
+        return pages
+    except Exception:
+        return []
+
+
+def extract_text(pdf_path: str, max_chars: int = 8000) -> str:
+    """PDF 正文前 max_chars 字（fitz 分页拼接）。fitz 不可用降级返回 ''。
+    🔴 修复 2026-10-21：原 periodic_reports 提取调用未定义的 extract_text/extract_sections，
+    触发 NameError，导致年报/半年报/季报正文从未进 results.json。"""
+    pages = _pdf_pages_text(pdf_path)
+    if not pages:
+        return ''
+    full = '\n'.join(t for _, t in pages)
+    return full[:max_chars]
+
+
+# 定期报告常见章节 marker → 短名（尽量与年报 annual_pdf.sections 的 key 对齐，便于下游复用）
+_PERIODIC_SECTION_MARKERS = [
+    ('管理层讨论与分析', 'mdaa'),
+    ('经营情况讨论与分析', 'mdaa'),
+    ('董事会报告', 'mdaa'),
+    ('主要会计数据和财务指标', 'financial_key_data'),
+    ('主要财务数据', 'financial_key_data'),
+    ('前十大股东', 'top10_shareholders'),
+    ('股本变动情况', 'share_structure'),
+]
+
+
+def extract_sections(pdf_path: str) -> Dict:
+    """定期报告章节抽取（fitz）：定位常见章节标题、跳过目录点线、抠正文前若干字。
+    返回 {短名: {'name','content','page'}}；fitz 不可用返回 {}。"""
+    pages = _pdf_pages_text(pdf_path)
+    if not pages:
+        return {}
+    sections: Dict = {}
+    for pno, ptxt in pages:
+        clean = re.sub(r'[ \t]+', ' ', ptxt)
+        for marker, key in _PERIODIC_SECTION_MARKERS:
+            if key in sections:
+                continue
+            idx = clean.find(marker)
+            if idx < 0:
+                continue
+            after = clean[idx + len(marker): idx + len(marker) + 40]
+            # 跳过目录页：标题后跟一长串点线
+            if re.search(r'[.。·…]{4,}', after):
+                continue
+            # 跳过正文交叉引用：标题被引号/书名号括起（如 查阅第三节"管理层讨论与分析"中…）
+            before = clean[max(0, idx - 5): idx].rstrip()
+            if (before.endswith(('《', '<', '>', '（', '(', '“', '”', '"', '‘'))
+                    or after[:1] in ('”', '"', '’', ')', '》', '>')):
+                continue
+            seg = re.sub(r'\n{2,}', '\n', clean[idx: idx + 1500]).strip()
+            if len(seg) > 40:
+                sections[key] = {'name': marker, 'content': seg[:1500], 'page': pno}
+    return sections
+
+
 # ============================================================
 # PDF下载核心
 # ============================================================
@@ -600,7 +810,11 @@ def extract_pdf_text(pdf_path: str, pages: int = None, toc_only: bool = False) -
             'sections': {...}  # 按章节提取的内容
         }
     """
-    import fitz  # PyMuPDF
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        print(f"  ⚠️ PyMuPDF 未安装，跳过PDF内容提取")
+        return {"success": False, "error": "PyMuPDF not installed", "text": "", "page_count": 0, "sections": {}, "toc": []}
 
     doc = fitz.open(pdf_path)
     total_pages = doc.page_count
@@ -729,7 +943,20 @@ def download_and_extract(stock_code: str, company_name: str = None,
     _years_default = 3  # 默认取近3年用于列表查找
     
     if _is_bse_stock(stock_code):
-        reports = _get_bse_annual_reports(stock_code, years=_years_default)
+        # 先迁码（8xxxxx/4xxxxx → 920xxx），再走东财公告源（BSE 官网翻页接口已失效）
+        _cur_code = stock_code
+        try:
+            from bse_migrate import resolve_bse_code
+            _mig = resolve_bse_code(stock_code)
+            if _mig.get('switched') and _mig.get('current_code'):
+                _cur_code = _mig['current_code']
+                print(f"[INFO] 北交所迁码：{stock_code} → {_cur_code}（{_mig.get('name')}）")
+        except Exception as _me:
+            print(f"[WARN] 北交所迁码解析失败，按原代码继续: {_me}")
+        reports = _get_bse_annual_from_em(_cur_code, years=_years_default)
+        if not reports:
+            print("[WARN] 东财北交所年报无结果，回退 BSE 官网翻页（历史接口）...")
+            reports = _get_bse_annual_reports(_cur_code, years=_years_default)
     elif stock_code.startswith('6'):
         # 上交所：6xxxx
         print(f"[INFO] 检测到上交所股票 {stock_code}，使用上交所API...")
@@ -783,9 +1010,47 @@ def download_and_extract(stock_code: str, company_name: str = None,
                     return {'error': f'上交所PDF反爬，需xbrowser cookie流程（magic={magic}）'}
         else:
             if not download_pdf(pdf_url, pdf_path):
-                return {'error': 'PDF下载失败'}
+                # 北交所：东财 PDF 走反爬（实测 985B <script> 页面伪装成 application/pdf）
+                # → 降级抓「公告全文文本」，MD&A/风险/审计意见仍可用（图表丢失）
+                txt = None
+                if target_report.get('art_code'):
+                    txt = _bse_text_fallback(target_report['art_code'], pdf_path)
+                if not txt:
+                    return {'error': 'PDF下载失败'}
+                return {
+                    'text_path': txt['text_path'],
+                    'text_chars': txt['chars'],
+                    'pdf_blocked': True,
+                    'pdf_url': pdf_url,
+                    'art_code': target_report['art_code'],
+                    'notice_url': (f"https://data.eastmoney.com/notices/detail/"
+                                   f"{target_report.get('current_code', stock_code)}/"
+                                   f"{target_report['art_code']}.html"),
+                    '_note': ('东财 PDF 接口反爬（返回 985B 脚本页），已改用公告全文文本；'
+                              '可人工打开 notice_url 下载原 PDF'),
+                }
     else:
         print(f"[SKIP] PDF已存在: {pdf_path}")
+
+    # 🔴 PDF 魔数校验（2026-10-21）：反爬页会被写成 .pdf，直接喂 fitz 只会报乱码
+    try:
+        with open(pdf_path, 'rb') as _f:
+            _magic = _f.read(5)
+        if _magic != b'%PDF-':
+            _sz = os.path.getsize(pdf_path)
+            print(f"[WARN] 下载文件非 PDF（magic={_magic!r}, size={_sz}B）→ 删除并走文本降级")
+            os.remove(pdf_path)
+            if target_report.get('art_code'):
+                _t = _bse_text_fallback(target_report['art_code'], pdf_path)
+                if _t:
+                    return {'text_path': _t['text_path'], 'text_chars': _t['chars'],
+                            'pdf_blocked': True, 'pdf_url': pdf_url,
+                            'art_code': target_report['art_code'],
+                            'notice_url': f"https://data.eastmoney.com/notices/detail/{stock_code}/"
+                                          f"{target_report['art_code']}.html"}
+            return {'error': f'下载内容非 PDF（可能是反爬页，{_sz}B）'}
+    except Exception as _ve:
+        print(f"[WARN] PDF 校验异常: {_ve}")
 
     # ── 步骤2：提取PDF文本和目录 ─────────────────────────────────────────────
     extracted = extract_pdf_text(pdf_path)

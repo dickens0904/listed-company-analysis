@@ -26,6 +26,10 @@ if __name__ == '__main__' and __package__ is None:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scripts.safe_request import safe_get, safe_extract
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
 
 # ==================== 常量配置 ====================
@@ -131,11 +135,73 @@ class EarningsForecaster:
                     })
         
         # 从 financial 数据补充最新一期
+        # 🔴 2026-10-20 修复「数据在但接不上」：
+        #   旧版读 `fin.get('revenue')` / `fin.get('net_profit')` —— 这两个**顶层字段不存在**，
+        #   实际结构是 `financial = {'records': [...], 'latest': {...}}`，
+        #   营收在 `records[i]['TOTAL_OPERATE_INCOME']`、净利在 `['PARENT_NETPROFIT']`、
+        #   日期在 `['REPORTDATE']`（**注意是 REPORTDATE，不是 REPORT_DATE**）。
+        #   结果 revenues=[] → 三个情景全部 insufficient → 目标价永远出不来
+        #   → advice_blocked（不出投资建议）。
+        #   现改为直接遍历 records，按 REPORTDATE 取年份。
+        _recs = (fin.get('records') if isinstance(fin, dict) else None) or []
+        _by_year: Dict[int, Dict[str, float]] = {}
+        _partial_years = set()      # 只披露了半年/季报、尚无年报的年份
+        for r in _recs:
+            d = (r.get('REPORTDATE') or r.get('REPORT_DATE') or
+                 r.get('NOTICE_DATE') or '')
+            y = None
+            if isinstance(d, str) and len(d) >= 4 and d[:4].isdigit():
+                y = int(d[:4])
+            elif isinstance(r.get('DATAYEAR'), (int, str)) and str(r['DATAYEAR']).isdigit():
+                y = int(r['DATAYEAR'])
+            if not y:
+                continue
+            rev = r.get('TOTAL_OPERATE_INCOME')
+            np_ = r.get('PARENT_NETPROFIT')
+            try:
+                rev = float(rev) / 1e8 if rev not in (None, '') else None
+            except (TypeError, ValueError):
+                rev = None
+            try:
+                np_ = float(np_) / 1e8 if np_ not in (None, '') else None
+            except (TypeError, ValueError):
+                np_ = None
+
+            # 🔴 2026-10-20：只有**年报**（12-31）才算年度值。
+            # 旧版把当年半年报（如 2026-06-30 营收 45.64 亿）当成 2026 年度值，
+            # 接在 2025 年报 165.15 亿后面 → CAGR 断崖式 -73% → 被 clamp 到 -10%
+            # → 保守/中性/乐观三档营收全部相同（41.08/36.97/33.27），情景失去意义。
+            is_annual = isinstance(d, str) and d[5:10] == '12-31'
+            if not is_annual:
+                _partial_years.add(y)
+                continue
+            slot = _by_year.setdefault(y, {})
+            if rev is not None:
+                slot['rev'] = rev
+            if np_ is not None:
+                slot['np'] = np_
+
+        # 只披露半年报/季报、**且该年无年报**的年份 → 不进入年度序列
+        # （2026 只有半年报，若不排除会把 45.64 亿半年营收当成全年，紧接 2025 年报
+        #   165.15 亿之后 → CAGR 断崖 -73% → 三档情景被 clamp 压平）
+        _orphan_years = sorted(_partial_years - set(_by_year))
+        if _orphan_years:
+            metrics['partial_years_excluded'] = _orphan_years
+
+        for y in sorted(_by_year):
+            slot = _by_year[y]
+            if slot.get('rev') is not None and not any(
+                    x['year'] == y for x in metrics['revenue']):
+                metrics['revenue'].append({'year': y, 'value': slot['rev']})
+            if slot.get('np') is not None and not any(
+                    x['year'] == y for x in metrics['net_profit']):
+                metrics['net_profit'].append({'year': y, 'value': slot['np']})
+
         if fin:
             latest_revenue = fin.get('revenue', 0)
             latest_profit = fin.get('net_profit', 0)
             latest_year = fin.get('year', 2025)
-            
+
             if latest_revenue and (not metrics['revenue'] or metrics['revenue'][-1]['year'] != latest_year):
                 metrics['revenue'].append({'year': latest_year, 'value': latest_revenue})
             if latest_profit and (not metrics['net_profit'] or metrics['net_profit'][-1]['year'] != latest_year):
@@ -158,29 +224,41 @@ class EarningsForecaster:
             
         return metrics
     
-    def _calculate_cagr(self, values: List[float], years: int = 3) -> float:
-        """计算CAGR"""
-        if len(values) < 2:
-            return 0.05  # 默认5%
-            
+    def _calculate_cagr(self, values: List[float], years: int = 3) -> Optional[float]:
+        """
+        计算CAGR
+
+        2026-10-16 审计修复（P0）：数据不足时返回 None，**不再默认 5%**。
+        上游须显式处理"数据不足"，不得把"无数据"当成"年增长5%"外推。
+        """
+        if not values:
+            return None
+        valid = [v for v in values if v is not None and v > 0]
+        if len(valid) < 2:
+            return None
+
         # 取最近N年
-        recent = values[-years:] if len(values) >= years else values
+        recent = valid[-years:] if len(valid) >= years else valid
         if len(recent) < 2:
-            return 0.05
-            
+            return None
+
         start = recent[0]
         end = recent[-1]
         n = len(recent) - 1
-        
+
         if start <= 0 or end <= 0:
-            return 0.05
-            
+            return None
+
         return (end / start) ** (1 / n) - 1
     
     def _forecast_scenario(self, metrics: Dict, scenario: str) -> Dict:
         """
         单情景预测
-        
+
+        2026-10-16 审计修复（P0）：**数据不足直接返回 error，不再用
+        base_revenue=100亿 / base_profit=10亿 等编造基准值外推**。
+        对应五段式铁律"缺口不得写成结论"。
+
         Returns:
             {
                 'years': [2026, 2027, 2028],
@@ -190,28 +268,68 @@ class EarningsForecaster:
                 'revenue_cagr': 0.15,
                 'profit_cagr': 0.18,
             }
+            或 {'error': '历史数据不足，无法预测', 'insufficient': True, ...}
         """
         params = SCENARIOS[scenario]
-        
+
         # 历史营收和利润
         revenues = [r['value'] for r in metrics['revenue'] if r['value']]
         profits = [p['value'] for p in metrics['net_profit'] if p['value']]
-        
-        # 计算历史CAGR
+
+        # ── 数据充分性门槛（硬约束）──
+        # 至少需要：2 期正营收 + 2 期正净利润，否则无法做有意义的外推
+        if len(revenues) < 2 or len(profits) < 2:
+            return {
+                'error': (f'历史数据不足，无法做{scenario}情景预测'
+                          f'（有效营收期数={len(revenues)}，有效净利润期数={len(profits)}，'
+                          f'均需≥2）。请先补齐财报数据源（MCP/结构化API），'
+                          f'不得使用编造基准值。'),
+                'insufficient': True,
+                'scenario': scenario,
+                'revenue_periods': len(revenues),
+                'profit_periods': len(profits),
+            }
+
+        # 计算历史CAGR（None 表示无法计算）
         revenue_cagr = self._calculate_cagr(revenues)
         profit_cagr = self._calculate_cagr(profits)
-        
+
+        if revenue_cagr is None or profit_cagr is None:
+            return {
+                'error': (f'历史增速无法计算（revenue_cagr={revenue_cagr}, '
+                          f'profit_cagr={profit_cagr}），通常因期间存在亏损或数据为负。'
+                          f'该公司不适合用CAGR外推法预测，建议改用人工判断或情景假设。'),
+                'insufficient': True,
+                'scenario': scenario,
+            }
+
         # 调整后的增长率
-        adj_revenue_cagr = max(-0.10, min(0.50, revenue_cagr + params['revenue_growth_adj']))
-        adj_profit_cagr = max(-0.15, min(0.60, profit_cagr + params['revenue_growth_adj']))
+        # 🔴 2026-10-20 修复「三档情景被压平」：旧顺序是
+        #   max(-0.10, min(0.50, cagr + adj))
+        #   当 cagr 极端（如 -0.73）时，cagr±0.03 都仍 < -0.10 → 全部被 clamp 到
+        #   -0.10 → 保守/中性/乐观营收完全相同，情景分析失去意义。
+        #   正确顺序：**先对基准 CAGR 做合理区间约束，再加情景偏移**，
+        #   保证三档之间至少保留参数设定的差异。
+        _base_rev_cagr = max(-0.10, min(0.50, revenue_cagr))
+        _base_prof_cagr = max(-0.15, min(0.60, profit_cagr))
+        adj_revenue_cagr = max(-0.15, min(0.55, _base_rev_cagr + params['revenue_growth_adj']))
+        adj_profit_cagr = max(-0.20, min(0.65, _base_prof_cagr + params['revenue_growth_adj']))
+
+        # 最新基数（已确认有数据）
+        base_revenue = revenues[-1]
+        base_profit = profits[-1]
         
-        # 最新基数
-        base_revenue = revenues[-1] if revenues else 100  # 亿元
-        base_profit = profits[-1] if profits else 10
-        
-        # 历史净利率
+        # 历史净利率（无 net_margin 时用 净利润/营收 推算；仍无则报错，不默认 10%）
         net_margins = [m['value'] for m in metrics['net_margin'] if m['value']]
-        avg_margin = sum(net_margins) / len(net_margins) if net_margins else 0.10
+        if not net_margins and base_revenue and base_revenue > 0:
+            net_margins = [base_profit / base_revenue]
+        if not net_margins:
+            return {
+                'error': '无法确定净利率（缺 net_margin 且营收为0），拒绝预测',
+                'insufficient': True,
+                'scenario': scenario,
+            }
+        avg_margin = sum(net_margins) / len(net_margins)
         adj_margin = max(0.01, min(0.50, avg_margin + params['margin_adj']))
         
         # 预测未来3年
@@ -307,12 +425,38 @@ class EarningsForecaster:
         - 永续期：Gordon增长模型
         - FCFF ≈ 净利润（简化，假设无重大资本支出和营运资金变化）
         """
+        # 2026-10-16 审计修复（P0）：预测数据不足时拒绝出 DCF
+        # 注意：insufficient 分支先于任何下标访问，避免 KeyError
+        if forecast.get('insufficient') or forecast.get('error') \
+                or not forecast.get('net_profit'):
+            return {
+                'error': '预测数据不足，无法做DCF估值（拒绝用编造现金流出终值）',
+                'insufficient': True,
+                'forecast_error': forecast.get('error'),
+            }
+
         fcfs = forecast['net_profit']  # 简化：FCFF ≈ 净利润
+        if any(f is None or f <= 0 for f in fcfs):
+            return {
+                'error': '预测净利润存在负值或缺失，DCF 不适用（亏损公司应改用PB/PS）',
+                'insufficient': True,
+            }
+
         years = forecast['years']
-        
+
         wacc = self._calculate_wacc(scenario=scenario)
         terminal_growth = TERMINAL_GROWTH_RATES[scenario]
-        
+
+        # 硬断言：WACC 必须显著大于永续增长率，否则 Gordon 模型失效
+        if wacc <= terminal_growth + 0.005:
+            return {
+                'error': (f'DCF失效：WACC({wacc:.4f}) 未显著大于永续增长率'
+                          f'({terminal_growth:.4f})，Gordon终值模型不成立。'
+                          f'请检查 WACC 假设（无风险利率/ERP/资本结构）后重算。'),
+                'insufficient': True,
+                'wacc': wacc,
+                'terminal_growth': terminal_growth,
+            }        
         # 显性期现值
         pv_explicit = 0
         for i, fcf in enumerate(fcfs):
@@ -356,21 +500,27 @@ class EarningsForecaster:
         
         需要行业可比公司数据
         """
+        # 2026-10-16 审计修复（P0）：预测数据不足时拒绝相对估值
+        if forecast.get('insufficient') or forecast.get('error'):
+            return {
+                'error': '预测数据不足，无法做相对估值',
+                'insufficient': True,
+                'forecast_error': forecast.get('error'),
+            }
+
         # 预测净利润（中性情景）
         profit_2026 = forecast['net_profit'][0] if forecast.get('net_profit') else None
-        
+
         if not profit_2026 or profit_2026 <= 0:
             return {
-                'pe_valuation': None,
-                'pb_valuation': None,
-                'industry_pe_median': None,
-                'industry_pb_median': None,
+                'error': '预测净利润为负或缺失，PE法不适用（亏损公司应改用PB/PS）',
+                'insufficient': True,
             }
-            
+
         # 行业PE/PB中位数
         industry_pe = []
         industry_pb = []
-        
+
         if self.industry_peers:
             for peer in self.industry_peers:
                 pe = peer.get('pe')
@@ -379,9 +529,19 @@ class EarningsForecaster:
                     industry_pe.append(pe)
                 if pb and pb > 0 and pb < 50:
                     industry_pb.append(pb)
-                    
-        pe_median = sorted(industry_pe)[len(industry_pe)//2] if industry_pe else 20
-        pb_median = sorted(industry_pb)[len(industry_pb)//2] if industry_pb else 2
+
+        # 2026-10-16 审计修复（P0）：无同业数据时**不默认 PE=20/PB=2**
+        if not industry_pe:
+            return {
+                'error': ('无有效同业PE数据（industry_peers 为空或全部异常），'
+                          '拒绝使用默认 PE=20 倍编造估值。请先通过 '
+                          'dzh-mcp.getBlockIndustryObj 拉取同业成分股行情。'),
+                'insufficient': True,
+                'peer_count': len(self.industry_peers or []),
+            }
+
+        pe_median = sorted(industry_pe)[len(industry_pe) // 2]
+        pb_median = sorted(industry_pb)[len(industry_pb) // 2] if industry_pb else None
         
         # PE估值
         pe_equity_value = profit_2026 * pe_median
@@ -424,32 +584,47 @@ class EarningsForecaster:
         """
         # 1. 三情景预测
         forecast = self.forecast_all_scenarios()
-        
+
+        # 2026-10-16 审计修复（P0）：任一情景数据不足 → 整体标 insufficient，不出目标价
+        _scen_keys = [s for s in ('conservative', 'neutral', 'optimistic') if s in forecast]
+        insufficient = bool(_scen_keys) and all(
+            forecast[s].get('insufficient') for s in _scen_keys
+        )
+        forecast_errors = {k: f.get('error') for k, f in forecast.items()
+                           if isinstance(f, dict) and f.get('error')}
+
         # 2. DCF估值（中性情景）
         dcf = self.dcf_valuation(forecast['neutral'], scenario='neutral')
-        
+
         # 3. 相对估值
         relative = self.relative_valuation(forecast['neutral'])
-        
+
         # 4. 目标价推导
         target_prices = []
-        
-        if dcf.get('per_share_value'):
+        blocked = []
+
+        if dcf.get('per_share_value') and not dcf.get('insufficient'):
             target_prices.append(('DCF', dcf['per_share_value']))
-        if relative.get('pe_valuation', {}).get('per_share'):
-            target_prices.append(('PE', relative['pe_valuation']['per_share']))
-            
+        elif dcf.get('error'):
+            blocked.append(('DCF', dcf['error']))
+
+        pe_val = relative.get('pe_valuation', {}) if isinstance(relative, dict) else {}
+        if pe_val and pe_val.get('per_share') and not relative.get('insufficient'):
+            target_prices.append(('PE', pe_val['per_share']))
+        elif relative.get('error'):
+            blocked.append(('PE', relative['error']))
+
         if target_prices:
             avg_target = sum(p[1] for p in target_prices) / len(target_prices)
             min_target = min(p[1] for p in target_prices)
             max_target = max(p[1] for p in target_prices)
         else:
             avg_target = min_target = max_target = None
-            
+
         # 5. 投资评级（简化逻辑）
         # 需要当前股价，这里留空，由调用方填充
-        rating = '待定价'
-        
+        rating = '数据不足，不出评级' if insufficient else '待定价'
+
         return {
             'forecast': forecast,
             'dcf': dcf,
@@ -458,7 +633,11 @@ class EarningsForecaster:
                 'methods': target_prices,
                 'average': round(avg_target, 2) if avg_target else None,
                 'range': [round(min_target, 2), round(max_target, 2)] if min_target else None,
+                'insufficient': insufficient,
+                'blocked': blocked,
+                'forecast_errors': forecast_errors,
             },
+            'insufficient': insufficient,
             'investment_rating': rating,
         }
 
@@ -485,7 +664,8 @@ def fetch_earnings_forecast(stock_code: str, market: str = 'a', data_dir: str = 
                         'multi_year_trend': findings.get('multi_year_trend', {}),
                         'industry': findings.get('industry', {}),
                     }
-            except Exception:
+            except Exception as _sexc:
+                record(__name__, 'fetch_earnings_forecast', _sexc, note='静默降级')
                 pass
     
     return generate_earnings_forecast(analysis_data, stock_code, market)
@@ -532,9 +712,34 @@ def generate_earnings_forecast(analysis_data: Dict, stock_code: str, market: str
 def format_forecast_markdown(valuation_data: Dict, stock_code: str) -> str:
     """
     将估值数据格式化为Markdown报告
+
+    2026-10-16 审计修复（P0）：数据不足时输出 🔴 红灯缺口说明，
+    不再输出由编造基准值推导的"综合目标价"。
     """
     lines = []
-    
+
+    # ── 🔴 红灯分支：数据不足，拒绝出结论 ──
+    if valuation_data.get('insufficient') or not valuation_data.get('target_price', {}).get('methods'):
+        lines.append("### 🔴 盈利预测与估值：数据不足，拒绝输出结论\n")
+        lines.append("> **未达输出门槛，本节不出具任何预测值与目标价。**\n")
+        fe = valuation_data.get('target_price', {}).get('forecast_errors', {})
+        if fe:
+            lines.append("**缺口原因（按情景）**：")
+            for k, v in fe.items():
+                lines.append(f"- {k}：{v}")
+            lines.append("")
+        blocked = valuation_data.get('target_price', {}).get('blocked', [])
+        if blocked:
+            lines.append("**被拦截的估值方法**：")
+            for name, err in blocked:
+                lines.append(f"- {name}法：{err}")
+            lines.append("")
+        lines.append("**补齐路径**：通过 `dzh-mcp`（getStockCorpProfit/getBalanceSheetMetrics/"
+                     "getStockXjllData/getBlockIndustryObj）或 `alphapai-lite-mcp`"
+                     "（query_financial_data）补齐财报与同业行情后重跑。")
+        lines.append("")
+        return "\n".join(lines)
+
     forecast = valuation_data.get('forecast', {})
     dcf = valuation_data.get('dcf', {})
     relative = valuation_data.get('relative', {})

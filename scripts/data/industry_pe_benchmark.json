@@ -1,0 +1,731 @@
+{
+  "meta": {
+    "total": 90,
+    "success": 90,
+    "failed": 0,
+    "generated_at": "2026-05-08 18:41:08"
+  },
+  "benchmark": {
+    "881165": {
+      "name": "综合",
+      "ths_code": "URFI881165",
+      "weighted_pe": 36.01,
+      "sample_count": 8,
+      "constituent_count": 16,
+      "updated_at": "2026-05-08 18:35:34"
+    },
+    "881171": {
+      "name": "自动化设备",
+      "ths_code": "URFI881171",
+      "weighted_pe": 123.56,
+      "sample_count": 14,
+      "constituent_count": 93,
+      "updated_at": "2026-05-08 18:35:40"
+    },
+    "881118": {
+      "name": "专用设备",
+      "ths_code": "URFI881118",
+      "weighted_pe": 59.34,
+      "sample_count": 14,
+      "constituent_count": 199,
+      "updated_at": "2026-05-08 18:35:43"
+    },
+    "881141": {
+      "name": "中药",
+      "ths_code": "URFI881141",
+      "weighted_pe": 32.19,
+      "sample_count": 14,
+      "constituent_count": 68,
+      "updated_at": "2026-05-08 18:35:45"
+    },
+    "881157": {
+      "name": "证券",
+      "ths_code": "URFI881157",
+      "weighted_pe": 25.31,
+      "sample_count": 20,
+      "constituent_count": 50,
+      "updated_at": "2026-05-08 18:35:47"
+    },
+    "881137": {
+      "name": "造纸",
+      "ths_code": "URFI881137",
+      "weighted_pe": 57.39,
+      "sample_count": 14,
+      "constituent_count": 24,
+      "updated_at": "2026-05-08 18:35:51"
+    },
+    "881270": {
+      "name": "元件",
+      "ths_code": "URFI881270",
+      "weighted_pe": 120.67,
+      "sample_count": 14,
+      "constituent_count": 62,
+      "updated_at": "2026-05-08 18:35:57"
+    },
+    "881275": {
+      "name": "游戏",
+      "ths_code": "URFI881275",
+      "weighted_pe": 34.52,
+      "sample_count": 12,
+      "constituent_count": 24,
+      "updated_at": "2026-05-08 18:35:58"
+    },
+    "881107": {
+      "name": "油气开采及服务",
+      "ths_code": "URFI881107",
+      "weighted_pe": 18.67,
+      "sample_count": 12,
+      "constituent_count": 19,
+      "updated_at": "2026-05-08 18:36:06"
+    },
+    "881274": {
+      "name": "影视院线",
+      "ths_code": "URFI881274",
+      "weighted_pe": 140.77,
+      "sample_count": 5,
+      "constituent_count": 20,
+      "updated_at": "2026-05-08 18:36:09"
+    },
+    "881133": {
+      "name": "饮料制造",
+      "ths_code": "URFI881133",
+      "weighted_pe": 31.18,
+      "sample_count": 15,
+      "constituent_count": 46,
+      "updated_at": "2026-05-08 18:36:11"
+    },
+    "881155": {
+      "name": "银行",
+      "ths_code": "URFI881155",
+      "weighted_pe": 6.61,
+      "sample_count": 20,
+      "constituent_count": 42,
+      "updated_at": "2026-05-08 18:36:13"
+    },
+    "881143": {
+      "name": "医药商业",
+      "ths_code": "URFI881143",
+      "weighted_pe": 28.11,
+      "sample_count": 16,
+      "constituent_count": 32,
+      "updated_at": "2026-05-08 18:36:14"
+    },
+    "881144": {
+      "name": "医疗器械",
+      "ths_code": "URFI881144",
+      "weighted_pe": 64.73,
+      "sample_count": 17,
+      "constituent_count": 139,
+      "updated_at": "2026-05-08 18:36:18"
+    },
+    "881175": {
+      "name": "医疗服务",
+      "ths_code": "URFI881175",
+      "weighted_pe": 41.83,
+      "sample_count": 16,
+      "constituent_count": 56,
+      "updated_at": "2026-05-08 18:36:22"
+    },
+    "881102": {
+      "name": "养殖业",
+      "ths_code": "URFI881102",
+      "weighted_pe": 38.24,
+      "sample_count": 11,
+      "constituent_count": 36,
+      "updated_at": "2026-05-08 18:36:26"
+    },
+    "881170": {
+      "name": "小金属",
+      "ths_code": "URFI881170",
+      "weighted_pe": 92.62,
+      "sample_count": 16,
+      "constituent_count": 29,
+      "updated_at": "2026-05-08 18:36:30"
+    },
+    "881173": {
+      "name": "小家电",
+      "ths_code": "URFI881173",
+      "weighted_pe": 42.87,
+      "sample_count": 18,
+      "constituent_count": 25,
+      "updated_at": "2026-05-08 18:36:36"
+    },
+    "881124": {
+      "name": "消费电子",
+      "ths_code": "URFI881124",
+      "weighted_pe": 99.61,
+      "sample_count": 8,
+      "constituent_count": 95,
+      "updated_at": "2026-05-08 18:36:44"
+    },
+    "881266": {
+      "name": "橡胶制品",
+      "ths_code": "URFI881266",
+      "weighted_pe": 107.53,
+      "sample_count": 10,
+      "constituent_count": 22,
+      "updated_at": "2026-05-08 18:36:57"
+    },
+    "881152": {
+      "name": "物流",
+      "ths_code": "URFI881152",
+      "weighted_pe": 17.14,
+      "sample_count": 16,
+      "constituent_count": 50,
+      "updated_at": "2026-05-08 18:36:59"
+    },
+    "881164": {
+      "name": "文化传媒",
+      "ths_code": "URFI881164",
+      "weighted_pe": 85.88,
+      "sample_count": 12,
+      "constituent_count": 85,
+      "updated_at": "2026-05-08 18:37:01"
+    },
+    "881117": {
+      "name": "通用设备",
+      "ths_code": "URFI881117",
+      "weighted_pe": 141.88,
+      "sample_count": 14,
+      "constituent_count": 250,
+      "updated_at": "2026-05-08 18:37:04"
+    },
+    "881129": {
+      "name": "通信设备",
+      "ths_code": "URFI881129",
+      "weighted_pe": 63.68,
+      "sample_count": 15,
+      "constituent_count": 90,
+      "updated_at": "2026-05-08 18:37:08"
+    },
+    "881162": {
+      "name": "通信服务",
+      "ths_code": "URFI881162",
+      "weighted_pe": 21.17,
+      "sample_count": 11,
+      "constituent_count": 45,
+      "updated_at": "2026-05-08 18:37:10"
+    },
+    "881265": {
+      "name": "塑料制品",
+      "ths_code": "URFI881265",
+      "weighted_pe": 88.67,
+      "sample_count": 15,
+      "constituent_count": 79,
+      "updated_at": "2026-05-08 18:37:15"
+    },
+    "881134": {
+      "name": "食品加工制造",
+      "ths_code": "URFI881134",
+      "weighted_pe": 24.13,
+      "sample_count": 17,
+      "constituent_count": 66,
+      "updated_at": "2026-05-08 18:37:20"
+    },
+    "881142": {
+      "name": "生物制品",
+      "ths_code": "URFI881142",
+      "weighted_pe": 45.38,
+      "sample_count": 14,
+      "constituent_count": 54,
+      "updated_at": "2026-05-08 18:37:24"
+    },
+    "881272": {
+      "name": "软件开发",
+      "ths_code": "URFI881272",
+      "weighted_pe": 212.57,
+      "sample_count": 8,
+      "constituent_count": 139,
+      "updated_at": "2026-05-08 18:37:28"
+    },
+    "881146": {
+      "name": "燃气",
+      "ths_code": "URFI881146",
+      "weighted_pe": 21.05,
+      "sample_count": 15,
+      "constituent_count": 27,
+      "updated_at": "2026-05-08 18:37:32"
+    },
+    "881125": {
+      "name": "汽车整车",
+      "ths_code": "URFI881125",
+      "weighted_pe": 48.22,
+      "sample_count": 14,
+      "constituent_count": 23,
+      "updated_at": "2026-05-08 18:37:34"
+    },
+    "881126": {
+      "name": "汽车零部件",
+      "ths_code": "URFI881126",
+      "weighted_pe": 51.61,
+      "sample_count": 16,
+      "constituent_count": 268,
+      "updated_at": "2026-05-08 18:37:38"
+    },
+    "881128": {
+      "name": "汽车服务及其他",
+      "ths_code": "URFI881128",
+      "weighted_pe": 49.27,
+      "sample_count": 14,
+      "constituent_count": 25,
+      "updated_at": "2026-05-08 18:37:42"
+    },
+    "881263": {
+      "name": "农化制品",
+      "ths_code": "URFI881263",
+      "weighted_pe": 22.01,
+      "sample_count": 15,
+      "constituent_count": 61,
+      "updated_at": "2026-05-08 18:37:46"
+    },
+    "881103": {
+      "name": "农产品加工",
+      "ths_code": "URFI881103",
+      "weighted_pe": 51.25,
+      "sample_count": 9,
+      "constituent_count": 43,
+      "updated_at": "2026-05-08 18:37:54"
+    },
+    "881267": {
+      "name": "能源金属",
+      "ths_code": "URFI881267",
+      "weighted_pe": 47.55,
+      "sample_count": 8,
+      "constituent_count": 12,
+      "updated_at": "2026-05-08 18:37:57"
+    },
+    "881182": {
+      "name": "美容护理",
+      "ths_code": "URFI881182",
+      "weighted_pe": 44.0,
+      "sample_count": 16,
+      "constituent_count": 33,
+      "updated_at": "2026-05-08 18:38:00"
+    },
+    "881105": {
+      "name": "煤炭开采加工",
+      "ths_code": "URFI881105",
+      "weighted_pe": 22.24,
+      "sample_count": 13,
+      "constituent_count": 34,
+      "updated_at": "2026-05-08 18:38:02"
+    },
+    "881159": {
+      "name": "贸易",
+      "ths_code": "URFI881159",
+      "weighted_pe": 28.11,
+      "sample_count": 8,
+      "constituent_count": 15,
+      "updated_at": "2026-05-08 18:38:06"
+    },
+    "881160": {
+      "name": "旅游及酒店",
+      "ths_code": "URFI881160",
+      "weighted_pe": 70.75,
+      "sample_count": 15,
+      "constituent_count": 35,
+      "updated_at": "2026-05-08 18:38:08"
+    },
+    "881158": {
+      "name": "零售",
+      "ths_code": "URFI881158",
+      "weighted_pe": 47.01,
+      "sample_count": 11,
+      "constituent_count": 72,
+      "updated_at": "2026-05-08 18:38:10"
+    },
+    "881179": {
+      "name": "其他社会服务",
+      "ths_code": "URFI881179",
+      "weighted_pe": 71.22,
+      "sample_count": 13,
+      "constituent_count": 41,
+      "updated_at": "2026-05-08 18:38:17"
+    },
+    "881123": {
+      "name": "其他电子",
+      "ths_code": "URFI881123",
+      "weighted_pe": 58.8,
+      "sample_count": 15,
+      "constituent_count": 34,
+      "updated_at": "2026-05-08 18:38:21"
+    },
+    "881282": {
+      "name": "其他电源设备",
+      "ths_code": "URFI881282",
+      "weighted_pe": 173.04,
+      "sample_count": 12,
+      "constituent_count": 33,
+      "updated_at": "2026-05-08 18:38:24"
+    },
+    "881166": {
+      "name": "军工装备",
+      "ths_code": "URFI881166",
+      "weighted_pe": 109.6,
+      "sample_count": 16,
+      "constituent_count": 83,
+      "updated_at": "2026-05-08 18:38:26"
+    },
+    "881276": {
+      "name": "军工电子",
+      "ths_code": "URFI881276",
+      "weighted_pe": 59.52,
+      "sample_count": 9,
+      "constituent_count": 63,
+      "updated_at": "2026-05-08 18:38:28"
+    },
+    "881114": {
+      "name": "金属新材料",
+      "ths_code": "URFI881114",
+      "weighted_pe": 127.69,
+      "sample_count": 17,
+      "constituent_count": 34,
+      "updated_at": "2026-05-08 18:38:34"
+    },
+    "881178": {
+      "name": "教育",
+      "ths_code": "URFI881178",
+      "weighted_pe": 124.58,
+      "sample_count": 7,
+      "constituent_count": 16,
+      "updated_at": "2026-05-08 18:38:42"
+    },
+    "881116": {
+      "name": "建筑装饰",
+      "ths_code": "URFI881116",
+      "weighted_pe": 16.42,
+      "sample_count": 18,
+      "constituent_count": 146,
+      "updated_at": "2026-05-08 18:38:46"
+    },
+    "881115": {
+      "name": "建筑材料",
+      "ths_code": "URFI881115",
+      "weighted_pe": 57.26,
+      "sample_count": 9,
+      "constituent_count": 73,
+      "updated_at": "2026-05-08 18:38:48"
+    },
+    "881130": {
+      "name": "计算机设备",
+      "ths_code": "URFI881130",
+      "weighted_pe": 72.12,
+      "sample_count": 14,
+      "constituent_count": 83,
+      "updated_at": "2026-05-08 18:38:50"
+    },
+    "881151": {
+      "name": "机场航运",
+      "ths_code": "URFI881151",
+      "weighted_pe": 54.85,
+      "sample_count": 13,
+      "constituent_count": 13,
+      "updated_at": "2026-05-08 18:38:51"
+    },
+    "881181": {
+      "name": "环境治理",
+      "ths_code": "URFI881181",
+      "weighted_pe": 38.92,
+      "sample_count": 13,
+      "constituent_count": 112,
+      "updated_at": "2026-05-08 18:38:55"
+    },
+    "881284": {
+      "name": "环保设备",
+      "ths_code": "URFI881284",
+      "weighted_pe": 74.89,
+      "sample_count": 12,
+      "constituent_count": 29,
+      "updated_at": "2026-05-08 18:38:58"
+    },
+    "881140": {
+      "name": "化学制药",
+      "ths_code": "URFI881140",
+      "weighted_pe": 61.03,
+      "sample_count": 14,
+      "constituent_count": 159,
+      "updated_at": "2026-05-08 18:39:04"
+    },
+    "881109": {
+      "name": "化学制品",
+      "ths_code": "URFI881109",
+      "weighted_pe": 95.9,
+      "sample_count": 12,
+      "constituent_count": 176,
+      "updated_at": "2026-05-08 18:39:10"
+    },
+    "881108": {
+      "name": "化学原料",
+      "ths_code": "URFI881108",
+      "weighted_pe": 90.25,
+      "sample_count": 10,
+      "constituent_count": 59,
+      "updated_at": "2026-05-08 18:39:12"
+    },
+    "881264": {
+      "name": "化学纤维",
+      "ths_code": "URFI881264",
+      "weighted_pe": 134.62,
+      "sample_count": 17,
+      "constituent_count": 29,
+      "updated_at": "2026-05-08 18:39:16"
+    },
+    "881177": {
+      "name": "互联网电商",
+      "ths_code": "URFI881177",
+      "weighted_pe": 66.69,
+      "sample_count": 11,
+      "constituent_count": 19,
+      "updated_at": "2026-05-08 18:39:19"
+    },
+    "881132": {
+      "name": "黑色家电",
+      "ths_code": "URFI881132",
+      "weighted_pe": 50.02,
+      "sample_count": 7,
+      "constituent_count": 9,
+      "updated_at": "2026-05-08 18:39:20"
+    },
+    "881139": {
+      "name": "家居用品",
+      "ths_code": "URFI881139",
+      "weighted_pe": 61.05,
+      "sample_count": 17,
+      "constituent_count": 98,
+      "updated_at": "2026-05-08 18:39:22"
+    },
+    "881169": {
+      "name": "贵金属",
+      "ths_code": "URFI881169",
+      "weighted_pe": 22.73,
+      "sample_count": 13,
+      "constituent_count": 13,
+      "updated_at": "2026-05-08 18:39:23"
+    },
+    "881269": {
+      "name": "轨交设备",
+      "ths_code": "URFI881269",
+      "weighted_pe": 20.28,
+      "sample_count": 16,
+      "constituent_count": 30,
+      "updated_at": "2026-05-08 18:39:27"
+    },
+    "881122": {
+      "name": "光学光电子",
+      "ths_code": "URFI881122",
+      "weighted_pe": 113.22,
+      "sample_count": 9,
+      "constituent_count": 107,
+      "updated_at": "2026-05-08 18:39:31"
+    },
+    "881279": {
+      "name": "光伏设备",
+      "ths_code": "URFI881279",
+      "weighted_pe": 41.2,
+      "sample_count": 5,
+      "constituent_count": 73,
+      "updated_at": "2026-05-08 18:39:37"
+    },
+    "881149": {
+      "name": "公路铁路运输",
+      "ths_code": "URFI881149",
+      "weighted_pe": 18.42,
+      "sample_count": 20,
+      "constituent_count": 32,
+      "updated_at": "2026-05-08 18:39:39"
+    },
+    "881168": {
+      "name": "工业金属",
+      "ths_code": "URFI881168",
+      "weighted_pe": 24.87,
+      "sample_count": 17,
+      "constituent_count": 56,
+      "updated_at": "2026-05-08 18:39:42"
+    },
+    "881268": {
+      "name": "工程机械",
+      "ths_code": "URFI881268",
+      "weighted_pe": 24.97,
+      "sample_count": 13,
+      "constituent_count": 36,
+      "updated_at": "2026-05-08 18:39:52"
+    },
+    "881148": {
+      "name": "港口航运",
+      "ths_code": "URFI881148",
+      "weighted_pe": 16.1,
+      "sample_count": 20,
+      "constituent_count": 36,
+      "updated_at": "2026-05-08 18:39:54"
+    },
+    "881112": {
+      "name": "钢铁",
+      "ths_code": "URFI881112",
+      "weighted_pe": 23.07,
+      "sample_count": 10,
+      "constituent_count": 44,
+      "updated_at": "2026-05-08 18:39:56"
+    },
+    "881136": {
+      "name": "服装家纺",
+      "ths_code": "URFI881136",
+      "weighted_pe": 65.45,
+      "sample_count": 17,
+      "constituent_count": 75,
+      "updated_at": "2026-05-08 18:40:00"
+    },
+    "881280": {
+      "name": "风电设备",
+      "ths_code": "URFI881280",
+      "weighted_pe": 52.86,
+      "sample_count": 15,
+      "constituent_count": 32,
+      "updated_at": "2026-05-08 18:40:04"
+    },
+    "881167": {
+      "name": "非金属材料",
+      "ths_code": "URFI881167",
+      "weighted_pe": 116.46,
+      "sample_count": 9,
+      "constituent_count": 14,
+      "updated_at": "2026-05-08 18:40:12"
+    },
+    "881135": {
+      "name": "纺织制造",
+      "ths_code": "URFI881135",
+      "weighted_pe": 69.78,
+      "sample_count": 17,
+      "constituent_count": 33,
+      "updated_at": "2026-05-08 18:40:16"
+    },
+    "881153": {
+      "name": "房地产",
+      "ths_code": "URFI881153",
+      "weighted_pe": 81.11,
+      "sample_count": 11,
+      "constituent_count": 87,
+      "updated_at": "2026-05-08 18:40:18"
+    },
+    "881180": {
+      "name": "石油加工贸易",
+      "ths_code": "URFI881180",
+      "weighted_pe": 16.0,
+      "sample_count": 11,
+      "constituent_count": 27,
+      "updated_at": "2026-05-08 18:40:19"
+    },
+    "881283": {
+      "name": "多元金融",
+      "ths_code": "URFI881283",
+      "weighted_pe": 30.47,
+      "sample_count": 18,
+      "constituent_count": 26,
+      "updated_at": "2026-05-08 18:40:21"
+    },
+    "881172": {
+      "name": "电子化学品",
+      "ths_code": "URFI881172",
+      "weighted_pe": 111.27,
+      "sample_count": 15,
+      "constituent_count": 40,
+      "updated_at": "2026-05-08 18:40:23"
+    },
+    "881278": {
+      "name": "电网设备",
+      "ths_code": "URFI881278",
+      "weighted_pe": 117.78,
+      "sample_count": 13,
+      "constituent_count": 138,
+      "updated_at": "2026-05-08 18:40:28"
+    },
+    "881145": {
+      "name": "电力",
+      "ths_code": "URFI881145",
+      "weighted_pe": 42.56,
+      "sample_count": 18,
+      "constituent_count": 109,
+      "updated_at": "2026-05-08 18:40:30"
+    },
+    "881277": {
+      "name": "电机",
+      "ths_code": "URFI881277",
+      "weighted_pe": 127.83,
+      "sample_count": 18,
+      "constituent_count": 26,
+      "updated_at": "2026-05-08 18:40:34"
+    },
+    "881281": {
+      "name": "电池",
+      "ths_code": "URFI881281",
+      "weighted_pe": 70.01,
+      "sample_count": 13,
+      "constituent_count": 105,
+      "updated_at": "2026-05-08 18:40:36"
+    },
+    "881101": {
+      "name": "种植业与林业",
+      "ths_code": "URFI881101",
+      "weighted_pe": 137.26,
+      "sample_count": 11,
+      "constituent_count": 30,
+      "updated_at": "2026-05-08 18:40:44"
+    },
+    "881174": {
+      "name": "厨卫电器",
+      "ths_code": "URFI881174",
+      "weighted_pe": 25.21,
+      "sample_count": 5,
+      "constituent_count": 9,
+      "updated_at": "2026-05-08 18:40:48"
+    },
+    "881156": {
+      "name": "保险",
+      "ths_code": "URFI881156",
+      "weighted_pe": 7.44,
+      "sample_count": 5,
+      "constituent_count": 5,
+      "updated_at": "2026-05-08 18:40:48"
+    },
+    "881138": {
+      "name": "包装印刷",
+      "ths_code": "URFI881138",
+      "weighted_pe": 103.42,
+      "sample_count": 14,
+      "constituent_count": 46,
+      "updated_at": "2026-05-08 18:40:50"
+    },
+    "881121": {
+      "name": "半导体",
+      "ths_code": "URFI881121",
+      "weighted_pe": 168.55,
+      "sample_count": 14,
+      "constituent_count": 179,
+      "updated_at": "2026-05-08 18:40:53"
+    },
+    "881131": {
+      "name": "白色家电",
+      "ths_code": "URFI881131",
+      "weighted_pe": 29.45,
+      "sample_count": 16,
+      "constituent_count": 45,
+      "updated_at": "2026-05-08 18:40:59"
+    },
+    "881273": {
+      "name": "白酒",
+      "ths_code": "URFI881273",
+      "weighted_pe": 23.67,
+      "sample_count": 15,
+      "constituent_count": 20,
+      "updated_at": "2026-05-08 18:41:03"
+    },
+    "881271": {
+      "name": "IT服务",
+      "ths_code": "URFI881271",
+      "weighted_pe": 78.7,
+      "sample_count": 8,
+      "constituent_count": 130,
+      "updated_at": "2026-05-08 18:41:08"
+    }
+  },
+  "failed": []
+}

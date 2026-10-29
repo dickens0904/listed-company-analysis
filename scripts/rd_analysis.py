@@ -23,11 +23,15 @@ import sys, os, re, json, time
 sys.stdout.reconfigure(encoding='utf-8')
 
 from scripts.safe_request import safe_get
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
-EM_API = 'http://datacenter-web.eastmoney.com/api/data/v1/get'
+EM_API = 'https://datacenter-web.eastmoney.com/api/data/v1/get'
 EM_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-    'Referer': 'http://data.eastmoney.com/',
+    'Referer': 'https://data.eastmoney.com/',
     'Accept': 'application/json',
 }
 
@@ -96,7 +100,8 @@ def _detect_asset_disposal(data_dir):
         try:
             result['disposal_gain_loss'] = round(
                 float(disposal_gain_loss.group(1).replace(',', '')) / 1e8, 2)
-        except:
+        except Exception as _sexc:
+            record(__name__, '_detect_asset_disposal', _sexc, note='静默降级')
             pass
 
     # 3. 提取终止性经营影响（利盟出售净影响，已是净值）
@@ -104,7 +109,8 @@ def _detect_asset_disposal(data_dir):
     if discontinued_ops:
         try:
             result['discontinued_ops'] = float(discontinued_ops.group(1))
-        except:
+        except Exception as _sexc:
+            record(__name__, '_detect_asset_disposal', _sexc, note='静默降级')
             pass
 
     # 4. 剩余股权重分类收益（权益法转公允价值，第二行数字）
@@ -115,7 +121,8 @@ def _detect_asset_disposal(data_dir):
             v = float(equity_remeasure.group(1).replace(',', ''))
             if abs(v) > 1e4:
                 result['equity_remeasure'] = round(v / 1e8, 2)
-        except:
+        except Exception as _sexc:
+            record(__name__, '_detect_asset_disposal', _sexc, note='静默降级')
             pass
 
     # 5. 被处置子公司名称（从文本动态提取，不硬编码）
@@ -178,7 +185,8 @@ def _get_annual_text(data_dir):
                 # 完整年报通常>50页，文本>20000字；太短说明是截断版本
                 if len(txt) > 20000:
                     return txt
-            except:
+            except Exception as _sexc:
+                record(__name__, '_get_annual_text', _sexc, note='静默降级')
                 pass
 
     # 从PDF提取（优先选含annual_report或数字最多的那个）
@@ -200,7 +208,8 @@ def _get_annual_text(data_dir):
                 txt += page.get_text('text')
             doc.close()
             return txt
-    except:
+    except Exception as _sexc:
+        record(__name__, '_get_annual_text', _sexc, note='静默降级')
         pass
     return ''
 
@@ -218,7 +227,8 @@ def _load_financial_data(data_dir, stock_code):
         try:
             with open(path, encoding='utf-8') as f:
                 return json.load(f)
-        except:
+        except Exception as _sexc:
+            record(__name__, '_load_financial_data', _sexc, note='静默降级')
             pass
     return None
 
@@ -541,7 +551,8 @@ def _get_rd_from_pdf(data_dir):
                     else:  # 否则按万元算
                         result['rd_expense_亿'] = round(val / 10000, 2)
                 break
-            except:
+            except Exception as _sexc:
+                record(__name__, '_get_rd_from_pdf', _sexc, note='静默降级')
                 pass
 
     # 资本化研发（优先匹配年报标准格式“研发投入资本化的金额（元）”，再匹配“万元”）
@@ -560,7 +571,8 @@ def _get_rd_from_pdf(data_dir):
                 else:
                     result['rd_capitalized_亿'] = round(val / 1e8, 2)
                 break
-            except:
+            except Exception as _sexc:
+                record(__name__, '_get_rd_from_pdf', _sexc, note='静默降级')
                 pass
 
     if result['rd_expense_亿'] and result['rd_capitalized_亿'] and result['rd_expense_亿'] > 0:

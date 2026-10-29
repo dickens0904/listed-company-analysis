@@ -11,11 +11,15 @@
 import sys, os, json
 sys.stdout.reconfigure(encoding="utf-8")
 from scripts.safe_request import safe_get, safe_extract, safe_float
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
-EM_API = "http://datacenter-web.eastmoney.com/api/data/v1/get"
+EM_API = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    "Referer": "http://data.eastmoney.com/",
+    "Referer": "https://data.eastmoney.com/",
     "Accept": "application/json",
 }
 
@@ -43,7 +47,7 @@ def _safe_float(val, default=None):
 
 
 def _import_akshare():
-    """延迟导入akshare"""
+    """延迟导入 akshare（避免模块级导入失败）"""
     try:
         import akshare as ak
         return ak
@@ -51,11 +55,26 @@ def _import_akshare():
         return None
 
 
-ak = _import_akshare()
+_ak = _import_akshare()
+
+# 安全代理：akshare 未安装时不崩溃，返回 None/空列表
+class _AkSafe:
+    def __getattr__(self, name):
+        return lambda *a, **kw: None
+
+ak = _ak if _ak is not None else _AkSafe()
+
+
+def _get_ak():
+    """获取 akshare 实例，未安装时返回 None"""
+    return _ak if _ak is not None else None
 
 
 def fetch_governance(stock_code, market="a", data_dir=None, annual_pdf_data=None, financial_data=None, announcements_data=None):
     """主函数：治理分析（整合版）"""
+    ak_avail = _get_ak()
+    if ak_avail is None:
+        print("  ⚠️ akshare 未安装，跳过 akshare 增强数据（pip install akshare）")
     result = {
         "stock_code": stock_code,
         # === 来自.qclaw版本的额外字段 ===
@@ -299,9 +318,11 @@ def _fetch_pledge_info_ak(stock_code):
                         elif ratio and ratio > 0:
                             pledge_info["signal"] = f"质押率{ratio:.0%}"
                         break
-            except Exception:
+            except Exception as _sexc:
+                record(__name__, '_fetch_pledge_info_ak', _sexc, note='静默降级')
                 pass
     except Exception as e:
+        record_result(__name__, '_fetch_pledge_info_ak', e, note='静默降级')
         pass
 
     # 质押记录
@@ -317,7 +338,8 @@ def _fetch_pledge_info_ak(stock_code):
                     "pledge_ratio_total": _safe_float(row.get('占总股本比例')),
                     "institution": str(row.get('质押机构', '')),
                 })
-    except Exception:
+    except Exception as _sexc:
+        record(__name__, '_fetch_pledge_info_ak', _sexc, note='静默降级')
         pass
 
     if pledge_info["latest_ratio"] is None and records:
@@ -389,7 +411,8 @@ def _fetch_management(secucode, announcements_data=None):
             df = ak.stock_gdfx_holding_detail_em(symbol=stock_code)
             if df is not None and not df.empty:
                 pass
-        except:
+        except Exception as _sexc:
+            record(__name__, '_fetch_management', _sexc, note='静默降级')
             pass
 
     return result
@@ -496,7 +519,8 @@ def _fetch_auditor(secucode, annual_pdf_data=None):
                 "years": len(records),
                 "latest_year": str(latest.get('REPORTDATE', ''))[:4],
             }
-    except:
+    except Exception as _sexc:
+        record(__name__, '_fetch_auditor', _sexc, note='静默降级')
         pass
 
     if result["auditor"] is None and annual_pdf_data:

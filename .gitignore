@@ -1,5 +1,9 @@
 # Secrets
 .tushare_token
+.em_api_key
+
+# Local fallback cache (打包到其他机器时 tmp_paths.py 的兜底目录)
+.tmp/
 
 # Output
 output/
@@ -7,3 +11,24 @@ output/
 # Cache
 __pycache__/
 *.pyc
+
+# Dev scratch / IDE / caches (non-deliverable; mirrors .gitattributes export-ignore)
+.trae/
+samples/
+_dev_scratch/
+scripts/.tdx_cache/
+
+# One-off downloaded test fixtures (only used by _dev_scratch experiments)
+cninfo_ann.pdf
+cninfo_list.json
+em_ann_list.json
+
+# Test outputs / generated artifacts
+scripts/test_output/
+test_report_*.pdf
+test_ann_page*.html
+test_*.pdf
+test_*.html
+
+# Backup files
+*.bak*

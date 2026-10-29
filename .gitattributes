@@ -1,0 +1,4 @@
+# 打包时剔除开发草稿 / 缓存（git archive 尊重 export-ignore，不影响工作区与提交）
+_dev_scratch/ export-ignore
+samples/      export-ignore
+.trae/        export-ignore

@@ -27,7 +27,12 @@ import os
 import re
 import sys
 import json
-import fitz
+try:
+    import fitz
+    _HAS_FITZ = True
+except ImportError:
+    fitz = None
+    _HAS_FITZ = False
 
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
@@ -401,6 +406,10 @@ class AnnualReportExtractor:
         self.text = ''
         self.doc = None
         self.lang = None  # 'cn' or 'en'
+        
+        if not _HAS_FITZ:
+            self.text = '[PyMuPDF not installed - PDF extraction disabled]'
+            return
 
         # ── 步骤1：打开PDF并检测语言 ──────────────────────────
         pdf_to_open = None

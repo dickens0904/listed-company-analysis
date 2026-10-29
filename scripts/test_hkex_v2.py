@@ -2,6 +2,10 @@
 import asyncio
 from playwright.async_api import async_playwright
 import re
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
 async def search_hkex_announcements(stock_code='00700'):
     """搜索港交所公告"""
@@ -35,7 +39,8 @@ async def search_hkex_announcements(stock_code='00700'):
                     name = await inp.get_attribute('name')
                     is_visible = await inp.is_visible()
                     print(f'  [{i}] type={inp_type}, placeholder={placeholder}, name={name}, visible={is_visible}')
-                except:
+                except Exception as _sexc:
+                    record(__name__, 'search_hkex_announcements', _sexc, note='静默降级')
                     pass
             
             # 尝试等待搜索框出现

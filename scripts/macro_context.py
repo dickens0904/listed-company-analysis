@@ -11,6 +11,10 @@
 """
 import sys, os, re, time
 from datetime import datetime, timedelta
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -63,7 +67,8 @@ def fetch_market_breadth(market="a"):
                     "zt_count": len(df_limit),
                     "note": "今日涨停家数",
                 }
-    except Exception:
+    except Exception as _sexc:
+        record(__name__, 'fetch_market_breadth', _sexc, note='静默降级')
         pass
 
     try:
@@ -118,7 +123,8 @@ def fetch_macro_indicators():
                 "latest": f"CPI: {latest.get('全国居民消费价格', latest.get('当月', 'N/A'))}",
                 "date": str(latest.get('月份', 'N/A')),
             }
-    except Exception:
+    except Exception as _sexc:
+        record(__name__, 'fetch_macro_indicators', _sexc, note='静默降级')
         pass
 
     # 社融/信贷
@@ -130,7 +136,8 @@ def fetch_macro_indicators():
                 "latest": f"社融增量: {latest.get('当月值', 'N/A')}亿元",
                 "date": str(latest.get('月份', 'N/A')),
             }
-    except Exception:
+    except Exception as _sexc:
+        record(__name__, 'fetch_macro_indicators', _sexc, note='静默降级')
         pass
 
     return indicators
@@ -167,7 +174,8 @@ def fetch_industry_policy_news(industry_name, days=30):
                         t_clean = re.sub(r'<[^>]+>', '', t).strip()
                         if t_clean and len(t_clean) > 8:
                             policies.append(t_clean)
-            except Exception:
+            except Exception as _sexc:
+                record(__name__, 'fetch_industry_policy_news', _sexc, note='静默降级')
                 pass
             time.sleep(0.2)
 

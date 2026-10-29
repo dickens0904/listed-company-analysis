@@ -8,6 +8,10 @@
 """
 import sys, json, requests, re, time, os
 from datetime import datetime
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 sys.stdout.reconfigure(encoding='utf-8')
 
 
@@ -162,7 +166,8 @@ def _extract_subsidiaries_from_annual_pdf(stock_code, data_dir):
                     text = f.read()
                 # 从全文搜索子公司名
                 names = _parse_subsidiary_names(text)
-            except:
+            except Exception as _sexc:
+                record(__name__, '_extract_subsidiaries_from_annual_pdf', _sexc, note='静默降级')
                 pass
         return names
     
@@ -175,7 +180,8 @@ def _extract_subsidiaries_from_annual_pdf(stock_code, data_dir):
         
         if content and not content.startswith('[未找到'):
             names = _parse_subsidiary_names(content)
-    except:
+    except Exception as _sexc:
+        record(__name__, '_extract_subsidiaries_from_annual_pdf', _sexc, note='静默降级')
         pass
     
     return names
@@ -313,6 +319,7 @@ def _search_csrc_tutoring_ak(sub_company_name=None):
             }
             results.append(row_dict)
     except Exception as e:
+        record_result(__name__, '_search_csrc_tutoring_ak', e, note='静默降级')
         pass  # 降级：AKShare不可用时静默返回空
     return results
 

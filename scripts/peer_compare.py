@@ -19,10 +19,10 @@ import requests, json, os, time, sys
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
-EM_API = 'http://datacenter-web.eastmoney.com/api/data/v1/get'
+EM_API = 'https://datacenter-web.eastmoney.com/api/data/v1/get'
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-    'Referer': 'http://data.eastmoney.com/',
+    'Referer': 'https://data.eastmoney.com/',
     'Accept': 'application/json',
 }
 

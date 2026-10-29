@@ -15,10 +15,10 @@ if __name__ == '__main__' and __package__ is None:
 else:
     from scripts.safe_request import safe_get, safe_extract
 
-EM_API = 'http://datacenter-web.eastmoney.com/api/data/v1/get'
+EM_API = 'https://datacenter-web.eastmoney.com/api/data/v1/get'
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-    'Referer': 'http://data.eastmoney.com/',
+    'Referer': 'https://data.eastmoney.com/',
     'Accept': 'application/json',
 }
 

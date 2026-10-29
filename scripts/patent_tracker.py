@@ -242,7 +242,7 @@ def search_patent_litigation(company_name, stock_code=None, market='a'):
 
     elif market == 'hk' and stock_code:
         try:
-            url = "http://www.cninfo.com.cn/new/fulltextSearch/full"
+            url = "https://www.cninfo.com.cn/new/fulltextSearch/full"
             params = {
                 'searchkey': f'{company_name} 专利',
                 'sdate': '', 'edate': '', 'isfulltext': 'false',

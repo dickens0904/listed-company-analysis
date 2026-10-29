@@ -287,10 +287,85 @@ def get_us_company_info(ticker: str) -> Optional[Dict]:
         return None
     return api.get_company_info(cik)
 
+def _resolve_cik(ticker: str) -> Optional[str]:
+    """ticker → 10 位 CIK（不依赖类内部的 ticker 解析，直接走 SEC 官方映射）"""
+    t = str(ticker).strip().upper()
+    if not t:
+        return None
+    if t.isdigit():  # 已是 CIK
+        return t.zfill(10)
+    try:
+        from sec_xbrl_api import TICKER_CIK_MAP
+        if t in TICKER_CIK_MAP:
+            return str(TICKER_CIK_MAP[t]).zfill(10)
+    except Exception:
+        pass
+    # 兜底：SEC 全量映射表（体积较大，仅未命中内置表时拉一次）
+    try:
+        j = requests.get('https://www.sec.gov/files/company_tickers.json',
+                         headers=SEC_HEADERS, timeout=25).json()
+        for _, row in j.items():
+            if str(row.get('ticker', '')).upper() == t:
+                return str(row.get('cik_str', '')).zfill(10)
+    except Exception:
+        pass
+    return None
+
+
 def get_us_10k_url(ticker: str) -> Optional[str]:
-    """获取美股10-K下载链接"""
-    api = get_api()
-    return api.get_filing_url(ticker, '10-K', 0)
+    """获取美股 10-K（年报）原文链接。
+
+    🔴 2026-10-21 修复：旧实现 `api.get_filing_url(ticker, '10-K', 0)` 把 **ticker**
+    传给了只接受 **CIK** 的方法 → `get_company_info('AAPL')` 必失败 → 恒返回 None，
+    美股 annual_pdf 一直是空 {}。现改为：ticker → CIK → SEC submissions API →
+    拼 Archives 直链（实测 AAPL 命中 2025-10-31 的 aapl-20250927.htm）。
+    """
+    cik = _resolve_cik(ticker)
+    if not cik:
+        return None
+    try:
+        j = requests.get(f'https://data.sec.gov/submissions/CIK{cik}.json',
+                         headers=SEC_HEADERS, timeout=30).json()
+        rec = (j.get('filings') or {}).get('recent') or {}
+        forms = rec.get('form') or []
+        for i, form in enumerate(forms):
+            if form != '10-K':
+                continue
+            acc = str(rec['accessionNumber'][i]).replace('-', '')
+            doc = rec['primaryDocument'][i]
+            return f'https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc}/{doc}'
+    except Exception:
+        return None
+    return None
+
+
+def get_us_10k_detail(ticker: str) -> Dict:
+    """10-K 元信息：{url, filing_date, accession}（annual_pdf 溯源用）"""
+    cik = _resolve_cik(ticker)
+    if not cik:
+        return {}
+    try:
+        j = requests.get(f'https://data.sec.gov/submissions/CIK{cik}.json',
+                         headers=SEC_HEADERS, timeout=30).json()
+        rec = (j.get('filings') or {}).get('recent') or {}
+        forms = rec.get('form') or []
+        for i, form in enumerate(forms):
+            if form != '10-K':
+                continue
+            acc_raw = str(rec['accessionNumber'][i])
+            acc = acc_raw.replace('-', '')
+            doc = rec['primaryDocument'][i]
+            return {
+                'url': f'https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc}/{doc}',
+                'filing_date': rec['filingDate'][i],
+                'accession': acc_raw,
+                'form': '10-K',
+                'cik': cik,
+                'company': j.get('name'),
+            }
+    except Exception:
+        return {}
+    return {}
 
 def get_us_10q_url(ticker: str) -> Optional[str]:
     """获取美股10-Q下载链接"""

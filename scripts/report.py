@@ -13,6 +13,17 @@ _scripts_dir = _os.path.dirname(_os.path.abspath(__file__))
 if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
+# 🔴 兼容导入：本模块大量使用 `from scripts.xxx import ...`。当从 scripts/ 目录
+#    直接运行（如重渲染脚本，sys.path 首位是 scripts/ 而非 skill 根）时，`scripts`
+#    包不存在 → "No module named 'scripts.financials'"。此处注册指向 scripts/ 的伪包。
+try:
+    import scripts as _scripts_pkg  # noqa: F401
+except ImportError:
+    import types as _types
+    _pkg = _types.ModuleType('scripts')
+    _pkg.__path__ = [_scripts_dir]
+    sys.modules['scripts'] = _pkg
+
 from datetime import datetime
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -86,7 +97,12 @@ def _call_module_section(dim, data, **kwargs):
         return []
     try:
         if module_path not in _module_cache:
-            _module_cache[module_path] = importlib.import_module(module_path)
+            try:
+                _module_cache[module_path] = importlib.import_module(module_path)
+            except ImportError:
+                # 从 scripts/ 目录直接运行（sys.path 已含 scripts/）时 `scripts` 包不可用
+                # → 回退裸模块名，避免 "No module named 'scripts.xxx'"
+                _module_cache[module_path] = importlib.import_module(module_path.split('.')[-1])
         mod = _module_cache[module_path]
         return mod.generate_report_section(data, **kwargs)
     except TypeError:
@@ -153,8 +169,18 @@ def _section_executive_summary(stock, findings):
         lines.append("")
 
     fin = findings.get('financial', {})
-    if fin.get('audit_opinion'):
-        lines.append(f"**审计意见**: {fin['audit_opinion']}")
+    # 审计意见：优先真实提取；旧推断值（含"推断"）不可信 → 用年报重建值或标"未取到"
+    _opinion = fin.get('audit_opinion')
+    if not _opinion or '推断' in str(_opinion):
+        _va = ((findings.get('annual_pdf') or {}).get('_visual_tables') or {}).get('audit', '')
+        if '标准无保留' in _va:
+            _opinion = '标准无保留意见'
+        elif any(x in _va for x in ('保留意见', '否定意见', '无法表示')):
+            _opinion = '非标准意见（详见年报审计报告）'
+        else:
+            _opinion = '未取到（详见年报审计报告）'
+    if _opinion:
+        lines.append(f"**审计意见**: {_opinion}")
         if fin.get('key_risks'):
             for r in fin['key_risks'][:3]:
                 lines.append(f"- {r}")
@@ -270,6 +296,33 @@ def _section_strategy(stock, findings):
     return lines
 
 
+def _section_valuation_fallback(findings):
+    """估值章节：SOTP 不成立/无 current 时，回退用当日行情快照的 PE/PB/市值。"""
+    q = findings.get('quote') or {}
+    v = findings.get('valuation') or {}
+    lines = ["## 估值分析", ""]
+    if q.get('mcap_yi') or q.get('price'):
+        lines.append("**行情快照估值**（当日收盘）")
+        lines.append("")
+        lines.append("| 指标 | 数值 | 说明 |")
+        lines.append("|---|---:|---|")
+        lines.append(f"| 股价 | {q.get('price', '—')} 元 | {q.get('_source', '')} |")
+        lines.append(f"| 总市值 | {q.get('mcap_yi', '—')} 亿元 | — |")
+        lines.append(f"| 流通市值 | {q.get('float_mcap_yi', '—')} 亿元 | — |")
+        _pe = q.get('pe_ttm')
+        _pe_note = '负值＝亏损，PE 无意义' if isinstance(_pe, (int, float)) and _pe < 0 else '—'
+        lines.append(f"| PE(TTM) | {_pe if _pe is not None else '—'} | {_pe_note} |")
+        lines.append(f"| PB | {q.get('pb', '—')} | — |")
+        lines.append("")
+        _note = v.get('note') or ''
+        lines.append(f"> 亏损公司 PE 失效，应以 PS / PB 交叉验证（PS = 总市值 / TTM 营收）。"
+                     f"分部估值（SOTP）{'不成立：' + _note if _note else '未生成'}。")
+    else:
+        lines.append("_暂无行情数据_")
+    lines.append("")
+    return lines
+
+
 def _section_quote(data):
     lines = []
     lines.append("## 三、实时行情")
@@ -307,6 +360,8 @@ def _section_quote(data):
         emoji = {'trading': '✅', 'success': '✅', 'suspended': '💤', 'not_found': '❓'}.get(status, '❓')
         rows.append([emoji, code, name, market_label, price, chg_str, pct_str, vol, time_str])
 
+    # 缺失字段的 ? / ❓ 统一显示为「—」，避免报告出现占位符
+    rows = [[('—' if str(v) in ('?', '❓', 'None') else v) for v in r] for r in rows]
     if rows:
         header = ['状态', '代码', '名称', '市场', '现价', '涨跌', '涨跌幅', '成交量', '时间']
         lines.append('| ' + ' | '.join(header) + ' |')
@@ -329,6 +384,161 @@ def _section_quote(data):
     if any(it.get('status') in ('suspended', 'not_found', 'error') for it in items):
         lines.append("")
     return lines
+
+
+def _clean_table_block(block):
+    """清洗单个 markdown 表格块。
+
+    - 删除**格内** None/NaN token（PDF 抽取常把多值挤进一格，如「None 应收账款 合同资产」）；
+    - 单格含 ≥4 个数字串 → 判定 PDF 表格结构已丢失，隐藏并提示（避免读者误读乱表）；
+    - 其余：去全空行列、超宽截断、长表截断。
+    """
+    import re as _re
+
+    def _tok(c):
+        c = _re.sub(r'(?<![A-Za-z0-9_])(?:None|NaN|null|nan)(?![A-Za-z0-9_])', ' ', c)
+        return _re.sub(r'[ \t]{2,}', ' ', c).strip()
+
+    data = []
+    for ln in block:
+        s = ln.strip()
+        if _re.match(r'^\|[\s\-:|]+\|$', s):      # 分隔行，重建时再生成
+            continue
+        data.append([_tok(c) for c in s.strip('|').split('|')])
+    if not data:
+        return []
+    ncol = max(len(r) for r in data)
+    data = [r + [''] * (ncol - len(r)) for r in data]
+
+    keep = [j for j in range(ncol) if any(r[j] for r in data)]
+
+    # 多值挤格 / 超宽表检测（PDF 表格行列结构丢失 → 隐藏，避免读者误读乱表）
+    def _nnum(c):
+        return len(_re.findall(r'\d[\d,]*\.\d+|\d{3,}', c))
+    if max((_nnum(c) for r in data for c in r), default=0) >= 3 or len(keep) > 12:
+        # 源 PDF 表格无清晰框线 → 列边界客观上不可还原（pdfplumber 把多行并成一格）。
+        # 不做假表，也不整段隐藏：保留原文数据行（去表格符号），读者至少能读到数。
+        out = ['', '> 📄 该表 PDF 行列结构未能还原（源表无清晰框线），以下为原文数据行：', '']
+        shown = 0
+        for r in data:
+            cells = [c for c in r if c]
+            if not cells:
+                continue
+            out.append('- ' + ' · '.join(cells))
+            shown += 1
+            if shown >= 24:
+                out.append('- _…（已截断，完整数据见年报原文）_')
+                break
+        return out
+
+    data = [[r[j] for j in keep] for r in data]
+    data = [r for r in data if any(r)]
+    if not data:
+        return []
+    # 破损表常出现"全空表头"→ 下移一行作表头
+    if not any(data[0]) and len(data) > 1:
+        data = data[1:]
+
+    def _cap(c):
+        c = c.replace('\n', ' ').strip()
+        return c if len(c) <= 60 else c[:58] + '…'
+    data = [[_cap(c) for c in r] for r in data]
+
+    out = ['| ' + ' | '.join(data[0]) + ' |',
+           '|' + '|'.join([' --- '] * len(data[0])) + '|']
+    body = data[1:]
+    truncated = False
+    if len(body) > 12:
+        body = body[:12]
+        truncated = True
+    out += ['| ' + ' | '.join(r) + ' |' for r in body]
+    if truncated:
+        out.append('')
+        out.append('_（该表已截断，完整数据以年报原文为准）_')
+    return out
+
+
+def _clean_md_tables(text):
+    """清洗 PDF 抽取表格：合并被换行拆断的行 + 逐表去 None / 空行列。"""
+    if not text:
+        return text
+    import re as _re
+    lines = text.split('\n')
+    # ① 合并续行：上一行是表格行、本行非空且不是标题/列表/引用/代码 → 拼回
+    merged = []
+    for ln in lines:
+        s = ln.strip()
+        if (merged and s and not s.startswith('|')
+                and not _re.match(r'^(#{1,6}\s|[-*+]\s|\d+\.\s|>|```)', s)
+                and merged[-1].strip().startswith('|')):
+            prev = merged[-1].rstrip()
+            # 续行以数字/逗号/点开头且上一行也以数字结尾 → 直接黏合（还原被换行截断的数字）
+            if (s[0].isdigit() or s[0] in ',.') and prev and (prev[-1].isdigit() or prev[-1] in ',.'):
+                merged[-1] = prev + s
+            else:
+                merged[-1] = prev + ' ' + s
+        else:
+            merged.append(ln)
+    # ② 逐表格块清洗
+    out, i = [], 0
+    while i < len(merged):
+        if merged[i].strip().startswith('|'):
+            block = []
+            while i < len(merged) and merged[i].strip().startswith('|'):
+                block.append(merged[i]); i += 1
+            out.extend(_clean_table_block(block))
+        else:
+            out.append(merged[i]); i += 1
+    return '\n'.join(out)
+
+
+def _parse_top5(content, label):
+    """把「序号 / 名称 / 金额 / 占比」竖排文本解析成 markdown 表；无法解析返回 None。
+
+    年报 PDF 文本层形如（每字段一行）：
+        序号 客户名称 销售额（元） 占年度销售总额比例
+        1 客户一 158,359,597.81 7.82%
+        ...
+        合计 -- 377,607,903.46 18.63%
+    """
+    import re as _re
+    if not content:
+        return None
+    lines = [l.strip() for l in content.split('\n') if l.strip()]
+
+    hdr = next((i for i, l in enumerate(lines) if label in l), None)
+    if hdr is None:
+        return None
+
+    # 表头可能占多行（列名各占一行）→ 找第一个纯数字行作数据起点
+    start = next((j for j in range(hdr + 1, len(lines)) if _re.fullmatch(r'\d{1,2}', lines[j])), None)
+    if start is None:
+        return None
+
+    rows, i = [], start
+    while i + 3 < len(lines):
+        no, nm, amt, pct = lines[i], lines[i + 1], lines[i + 2], lines[i + 3]
+        if not _re.fullmatch(r'\d{1,2}', no) or not _re.search(r'[\d,]+\.\d{2}', amt):
+            break
+        rows.append([no, nm, amt, pct])
+        i += 4
+    if len(rows) < 3:
+        return None
+
+    md = ['| 序号 | %s | 金额（元） | 占比 |' % label,
+          '| --- | --- | ---: | ---: |']
+    md += ['| %s | %s | %s | %s |' % tuple(r) for r in rows]
+
+    # 合计行（「合计」后可能隔页码行，向后找金额与占比）
+    for j in range(i, len(lines) - 1):
+        if lines[j] == '合计':
+            seg = lines[j:j + 6]
+            _amt = next((x for x in seg if _re.search(r'[\d,]+\.\d{2}', x)), '')
+            _pct = next((x for x in seg if _re.fullmatch(r'\d+(?:\.\d+)?%', x)), '')
+            if _amt:
+                md.append('| 合计 | — | %s | %s |' % (_amt, _pct or '—'))
+            break
+    return '\n'.join(md)
 
 
 def _section_annual_pdf(data):
@@ -373,10 +583,53 @@ def _section_annual_pdf(data):
         if is_new_format:
             lines.append("**📑 年报关键章节内容**（共{:d}章节）：\n".format(len(sections)))
             for key in sections:
+                # 去重：litigation_detail 与 litigation 内容高度重复（后者已含汇总），仅保留后者
+                if key == 'litigation_detail' and 'litigation' in sections:
+                    continue
                 sdata = sections[key]
                 name = sdata.get('name', key)
                 desc = sdata.get('description', '')
-                content = sdata.get('content', '')
+                # 🔴 视觉重建表优先：PDF 表格无清晰框线导致抽取错位时，
+                #    由人/AI 看页面截图理解结构后重建的 markdown 表（存于 annual_pdf._visual_tables），
+                #    此处直接采用，不再走 PDF 文本清洗/降级。
+                _vis = (data.get('_visual_tables') or {}).get(key)
+                if _vis:
+                    lines.append(f"### {name}")
+                    if desc:
+                        lines.append(f"_{desc}_  ")
+                    lines.append(_vis)
+                    lines.append("")
+                    continue
+                raw_content = sdata.get('content', '')
+                # 碎片降级：PDF 原文被拆成大量短行（平均 <18 字/行，如「姓名/性/别/年/龄」），
+                # 直接铺进报告无法阅读 → 只给页码指引（有价值的内容另见 _visual_tables）
+                _ls = [x for x in raw_content.split('\n') if x.strip()]
+                if (key not in ('top5_customers', 'top5_suppliers')
+                        and len(_ls) > 60 and (sum(len(x) for x in _ls) / len(_ls)) < 15):
+                    lines.append(f"### {name}")
+                    if desc:
+                        lines.append(f"_{desc}_  ")
+                    _pg = next((x for x in raw_content.split('\n') if '第' in x and '页' in x), '')
+                    lines.append(f"> 📄 本章为年报 PDF 原文逐行碎片（{len(_ls)} 行），"
+                                 f"不便直接阅读；完整内容见年报{_pg or '对应页'}。")
+                    lines.append("")
+                    continue
+                # 前五名客户/供应商：原文是竖排文本（序号/名称/金额/占比 各一行），
+                # 文本层完整 → 解析成规范表格（不隐藏、不丢数据）
+                if key in ('top5_customers', 'top5_suppliers'):
+                    _label = '客户名称' if key == 'top5_customers' else '供应商名称'
+                    _tbl = _parse_top5(raw_content, _label)
+                    if _tbl:
+                        lines.append(f"### {name}")
+                        if desc:
+                            lines.append(f"_{desc}_  ")
+                        _head = next((l.strip() for l in raw_content.split('\n') if '关联方' in l), '')
+                        if _head:
+                            lines.append(f'> {_head}')
+                        lines.append(_tbl)
+                        lines.append("")
+                        continue
+                content = _clean_md_tables(raw_content)
                 if not content or content.startswith('[未找到') or content.startswith('[无'):
                     continue
                 lines.append(f"### {name}")
@@ -432,6 +685,13 @@ def generate_report(results, out_dir):
     market_name = {'a': 'A股', 'hk': '港股', 'us': '美股'}.get(market, 'A股')
     findings = results['findings']
     date = results['date']
+    # 🔴 审计意见校正：旧版按"净利润为负"推断出的"非标准意见"不可信（亏损≠非标），
+    #    有年报重建值则用真实值，否则标"未取到"——禁止编造审计意见。
+    _fin0 = findings.get('financial')
+    if isinstance(_fin0, dict) and '推断' in str(_fin0.get('audit_opinion') or ''):
+        _va0 = ((findings.get('annual_pdf') or {}).get('_visual_tables') or {}).get('audit', '')
+        _fin0['audit_opinion'] = ('标准无保留意见' if '标准无保留' in _va0
+                                  else '未取到（详见年报审计报告）')
 
     lines = []
     lines.append(f"# {stock} {market_name} 全景分析报告")
@@ -459,8 +719,13 @@ def generate_report(results, out_dir):
     pli_data = findings.get('product_line_intro', {})
     if pli_data:
         try:
-            from scripts.product_line_intro import generate_report_section as pli_report
-            lines += pli_report(pli_data)
+            # 用文件路径直接加载，绕过 `scripts` 包名在运行时的解析差异
+            import importlib.util as _ilu
+            _pli_path = os.path.join(_scripts_dir, 'product_line_intro.py')
+            _spec = _ilu.spec_from_file_location('_pli_report', _pli_path)
+            _pli = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_pli)
+            lines += _pli.generate_report_section(pli_data)
         except Exception as e:
             lines.append(f"\n⚠️ 产品与产线基地章节生成失败: {e}\n")
 
@@ -471,6 +736,9 @@ def generate_report(results, out_dir):
             batch[dim] = ai[dim]
 
     for dim in results['dims']:
+        # 产品与产线已在正文前专门渲染（generate_report 中 pli_data 段），此处跳过避免重复
+        if dim == 'product_line_intro':
+            continue
         if dim == 'quote':
             if 'quote' in findings:
                 lines += _section_quote(findings['quote'])
@@ -479,6 +747,28 @@ def generate_report(results, out_dir):
         if dim == 'annual_pdf':
             if 'annual_pdf' in findings:
                 lines += _section_annual_pdf(findings['annual_pdf'])
+            continue
+
+        # 估值：SOTP 不成立时回退行情快照（PE/PB/市值），避免出现「暂无行情数据」
+        if dim == 'valuation':
+            lines += _section_valuation_fallback(findings)
+            continue
+
+        # qcc 权威维度：专用渲染器（2026-10-19）
+        if dim == 'legal_risk':
+            try:
+                from scripts.qcc_dimensions import format_legal_risk_markdown
+                lines.append(format_legal_risk_markdown(data))
+            except Exception as e:
+                lines.append(f"\n⚠️ 法律/合规风险章节生成失败: {e}\n")
+            continue
+
+        if dim == 'intellectual_property':
+            try:
+                from scripts.qcc_dimensions import format_ip_markdown
+                lines.append(format_ip_markdown(data))
+            except Exception as e:
+                lines.append(f"\n⚠️ 知识产权章节生成失败: {e}\n")
             continue
 
         data = findings.get(dim, {})
@@ -543,6 +833,16 @@ def generate_report(results, out_dir):
 
     lines += _section_unknown(findings)
 
+    # ⚠️ 静默降级清单（2026-10-19 审计新增）
+    # 置于报告末尾"附录位"：不污染主体叙事，但让数据可靠性问题可追问、可追责。
+    se = results.get('_silenced_errors') or {}
+    if se.get('total'):
+        try:
+            from scripts.silenced_errors import format_markdown as _fmt_sil
+            lines.append(_fmt_sil(se))
+        except Exception as e:
+            lines.append(f"\n⚠️ 静默降级清单渲染失败: {e}\n")
+
     report_text = '\n'.join(lines)
 
     cn_nums = ['一','二','三','四','五','六','七','八','九','十',
@@ -563,7 +863,34 @@ def generate_report(results, out_dir):
     
     report_text = re.sub(r'^## ([^#\n])', _add_num, report_text, flags=re.MULTILINE)
 
+    # ── P0 红线章节注入（2026-10-16 审计修复）──
+    # 核心维度数据不足时，把 🔴 红灯说明插到报告最顶部（执行摘要之前），
+    # 确保读者第一眼看到"本报告不出具投资建议"，而不是先看到一堆半截数据。
+    try:
+        from scripts.redline_gate import format_redline_markdown
+        rl = (results or {}).get('redline')
+        if rl:
+            rl_md = format_redline_markdown(rl)
+            if rl_md:
+                report_text = rl_md + '\n' + report_text
+    except Exception as _e:
+        print(f"  ⚠️ 红灯章节注入失败: {_e}")
+
+    # AI 全景叙事过长（实测 1.7 万字）→ 截断至 1500 字，避免淹没整篇报告
+    _m_ai = re.search(r'(#{2,3}\s*🤖\s*AI公司全景叙事[^\n]*\n)', report_text)
+    if _m_ai:
+        _st = _m_ai.end()
+        _rest = report_text[_st:]
+        _nxt = re.search(r'\n## ', _rest)
+        _seg = _rest[:_nxt.start()] if _nxt else _rest
+        if len(_seg) > 1500:
+            report_text = (report_text[:_st] + _seg[:1500]
+                           + '\n\n_（AI 全景叙事过长，已截断至 1500 字）_\n'
+                           + (_rest[_nxt.start():] if _nxt else ''))
     report_path = os.path.join(out_dir, 'report.md')
+    # 兜底：模块拼出的 HTML 表格里残留的 None 单元格 → 统一替换为「—」
+    report_text = (report_text.replace('<td>None</td>', '<td>—</td>')
+                              .replace('<td> None </td>', '<td>—</td>'))
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write(report_text)
 
@@ -642,8 +969,12 @@ def _generate_warnings(findings, path):
                 lines.append(f"- 🔴 {r.get('date','')} {r.get('title','')}")
             lines.append("")
 
+    # 兜底：模块拼出的 HTML 表格里残留的 None 单元格 → 统一替换为「—」
+    _md_out = '\n'.join(lines)
+    _md_out = (_md_out.replace('<td>None</td>', '<td>—</td>')
+                      .replace('<td> None </td>', '<td>—</td>'))
     with open(path, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(lines))
+        f.write(_md_out)
 
 
 if __name__ == '__main__':

@@ -36,5 +36,7 @@ def get_em_api_key() -> str:
     if _EM_API_KEY_FILE.exists():
         api_key = _EM_API_KEY_FILE.read_text().strip()
         if api_key and len(api_key) > 20:
-            # 同时设置环境变量，供后续代码使用
             os.environ['EM_API_KEY'] = api_key
+            return api_key
+    
+    return None

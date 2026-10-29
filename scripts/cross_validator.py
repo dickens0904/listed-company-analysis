@@ -28,6 +28,10 @@ cross_validator.py - 跨维度交叉验证引擎
 
 import sys, json, re, os
 from datetime import datetime
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
@@ -38,7 +42,9 @@ class CrossValidator:
 
     LEVEL_SUSPECTED = '🟡疑似'
     LEVEL_LIKELY = '🟠高度疑似'
-    LEVEL_CONFIRMED = '🔴实锤'
+    # P2（2026-10-16）：原为 '🔴实锤'。"实锤"等于定性指控，
+    # 但底层是关键词/正则的脆弱检测，对上市公司下此结论有合规/声誉风险。
+    LEVEL_CONFIRMED = '🔴多信号叠加(需专项核实)'
 
     def __init__(self, findings, stock_code, market='a'):
         self.findings = findings
@@ -100,7 +106,8 @@ class CrossValidator:
                         'audit': _sc(sec.get('audit')),
                         'subsidiaries': _sc(sec.get('subsidiaries')),
                     }
-                except Exception:
+                except Exception as _sexc:
+                    record(__name__, '_sc', _sexc, note='静默降级')
                     pass
 
         return {}
@@ -541,7 +548,8 @@ class CrossValidator:
                     amounts = re.findall(r'(\d+(?:\.\d+)?)\s*亿', str(fact))
                     for a in amounts:
                         try: guarantee_amount_total += float(a)
-                        except: pass
+                        except Exception as _sexc:
+                            record(__name__, '_rule_hidden_debt', _sexc, note='静默降级')
         if guarantee_amount_total > 0:
             fin_records = financial.get('records', [])
             if fin_records:
@@ -573,15 +581,18 @@ class CrossValidator:
             all_yi = []
             for a in cny_yi + cny_yi2:
                 try: all_yi.append(float(a))
-                except: pass
+                except Exception as _sexc:
+                    record(__name__, '_rule_hidden_debt', _sexc, note='静默降级')
             for a in usd_full + usd_amounts:
                 try: all_yi.append(float(a.replace(',', '')) / 1e8 * 7.2)  # USD→亿人民币
-                except: pass
+                except Exception as _sexc:
+                    record(__name__, '_rule_hidden_debt', _sexc, note='静默降级')
             # 格式4: "XX万元" 转换
             wan_amounts = re.findall(r'(\d+(?:,\d+)*)\s*万元', litigation_text)
             for a in wan_amounts:
                 try: all_yi.append(float(a.replace(',', '')) / 10000)  # 万元→亿
-                except: pass
+                except Exception as _sexc:
+                    record(__name__, '_rule_hidden_debt', _sexc, note='静默降级')
 
             if all_yi:
                 max_lit = max(all_yi)
@@ -866,9 +877,22 @@ class CrossValidator:
             medium = sum(1 for s in sigs if s['strength'] == 'medium')
             weak = sum(1 for s in sigs if s['strength'] == 'weak')
 
-            # 定级逻辑
-            if strong >= 2:
+            # P2 护栏（2026-10-16 审计修复）：
+            # 旧版 strong>=2 即判"🔴实锤"。但 strong 信号多来自
+            # 关键词/正则的脆弱检测（如 V 型反转、非标审计意见），
+            # 会把正常公司误判为财务造假，且"实锤"措辞等于定性指控，
+            # 有合规/声誉风险。
+            # 新规：
+            #   a) "实锤"须 ≥3 个 strong 且来自 ≥3 个**不同维度**；
+            #   b) 2 个 strong 降级为"高度疑似"；
+            #   c) 等级标签由"实锤"改为"多信号叠加，需专项核实"。
+            distinct_dims = len({s['dim'] for s in sigs if s['strength'] == 'strong'})
+            independent = distinct_dims >= 3
+
+            if strong >= 3 and independent:
                 level = self.LEVEL_CONFIRMED
+            elif strong >= 2:
+                level = self.LEVEL_LIKELY
             elif strong >= 1 and (medium >= 1 or weak >= 2):
                 level = self.LEVEL_LIKELY
             elif strong >= 1:
@@ -890,8 +914,14 @@ class CrossValidator:
                 'type': type_,
                 'level': level,
                 'signal_count': len(sigs),
+                'strong_count': strong,
+                'independent_dims': distinct_dims,
                 'signals': sigs,
                 'narrative': narrative,
+                # P2：所有等级统一附核实要求，不得作为定性结论
+                'verification_required': True,
+                'disclaimer': ('以上为多维度信号交叉提示，非审计或监管结论；'
+                              '须回到一手披露文件逐项核实后方可定性。'),
             })
 
         # 3. 按等级排序：实锤 > 高度疑似 > 疑似
@@ -905,7 +935,7 @@ class CrossValidator:
 
         narratives = {
             ('利润质量', '虚增利润'):
-                f"**虚增利润嫌疑**（{level}）："
+                f"**虚增利润疑点（需核实）**（{level}）："
                 f"多个维度交叉指向利润质量问题。"
                 f"{'现金流与利润背离，' if any(s['id'] == 'P1A' for s in sigs) else ''}"
                 f"{'应收账款异常增长，' if any(s['id'] == 'P1B' for s in sigs) else ''}"
@@ -916,35 +946,35 @@ class CrossValidator:
                 f"建议深入核查收入确认政策和回款情况。",
 
             ('利润质量', '报表洗澡'):
-                f"**报表洗澡嫌疑**（{level}）："
+                f"**报表洗澡疑点（需核实）**（{level}）："
                 f"{'大额减值冲回+利润V型反转，' if any(s['id'] == 'P2B' for s in sigs) else ''}"
                 f"{'配合股权激励行权条件，' if any(s['id'] == 'P2C' for s in sigs) else ''}"
-                f"疑似通过一次性减值压低基数，为后续业绩释放预留空间。",
+                f"可能存在通过一次性减值压低基数的情形，需核查减值测试依据与会计估计变更。",
 
             ('利润质量', '利润转移'):
-                f"**利润转移嫌疑**（{level}）："
+                f"**利润转移疑点（需核实）**（{level}）："
                 f"高频关联交易+供应商集中，利润可能通过关联定价向外转移。"
-                f"需核查关联交易定价公允性及客户/供应商实际控制关系。",
+                f"建议核查关联交易定价公允性及客户/供应商实际控制关系。",
 
             ('利益输送', '隐性关联交易'):
-                f"**隐性关联交易**（{level}）："
-                f"大股东与前五客户/供应商存在名称重叠，存在未披露的关联交易嫌疑。"
+                f"**隐性关联交易疑点（需核实）**（{level}）："
+                f"大股东与前五客户/供应商存在名称重叠，存在未披露关联交易的可能性。"
                 f"需核查交易实质和定价合理性。",
 
             ('利益输送', '资产掏空'):
-                f"**资产掏空嫌疑**（{level}）："
+                f"**资产掏空疑点（需核实）**（{level}）："
                 f"{'频繁关联收购/增资，' if any(s['id'] == 'T2A' for s in sigs) else ''}"
                 f"{'关联方出售/转让，' if any(s['id'] == 'T2B' for s in sigs) else ''}"
                 f"{'其他应收款偏高疑似资金占用，' if any(s['id'] == 'T2C' for s in sigs) else ''}"
                 f"需关注关联交易定价是否公允、是否存在利益输送。",
 
             ('套现跑路', '实控人撤退'):
-                f"**实控人撤退信号**（{level}）："
+                f"**实控人减持/质押疑点（需核实）**（{level}）："
                 f"{'高质押率，' if any(s['id'] == 'E1A' for s in sigs) else ''}"
                 f"{'大股东减持，' if any(s['id'] == 'E1B' for s in sigs) else ''}"
                 f"{'限售股即将解禁，' if any(s['id'] == 'E1C' for s in sigs) else ''}"
                 f"{'关联收购+减持并存，' if any(s['id'] == 'E1D' for s in sigs) else ''}"
-                f"实控人可能正在变现离场。",
+                f"实控人存在减持/质押行为，需结合公告与质押平仓线判断。",
 
             ('套现跑路', '高管先行'):
                 f"**高管先行离场**（{level}）："
@@ -987,7 +1017,7 @@ class CrossValidator:
             ('治理缺陷', '审计合谋'):
                 f"**审计独立性存疑**（{level}）："
                 f"在关联交易频繁+高管异动的情况下获得标准审计意见，"
-                f"审计师可能未充分执行审计程序。",
+                f"审计意见类型提示风险，需调阅审计报告与关键审计事项。",
 
             ('利益输送', '关联方代持'):
                 f"**关联方代持嫌疑**（{level}）："

@@ -80,8 +80,8 @@ def search_cninfo_annual(stock_code: str, company_name: str = None) -> Dict:
         'method': 'POST',
         'headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            'Referer': 'http://www.cninfo.com.cn/new/disclosure/stock',
-            'Origin': 'http://www.cninfo.com.cn',
+            'Referer': 'https://www.cninfo.com.cn/new/disclosure/stock',
+            'Origin': 'https://www.cninfo.com.cn',
             'X-Requested-With': 'XMLHttpRequest',
             'Content-Type': 'application/x-www-form-urlencoded',
         },
@@ -135,8 +135,8 @@ def search_cninfo_periodic(stock_code: str, company_name: str = None,
         'method': 'POST',
         'headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            'Referer': 'http://www.cninfo.com.cn/new/disclosure/stock',
-            'Origin': 'http://www.cninfo.com.cn',
+            'Referer': 'https://www.cninfo.com.cn/new/disclosure/stock',
+            'Origin': 'https://www.cninfo.com.cn',
             'X-Requested-With': 'XMLHttpRequest',
             'Content-Type': 'application/x-www-form-urlencoded',
         },
@@ -175,7 +175,7 @@ def parse_cninfo_response(json_data: dict) -> List[Dict]:
             results.append({
                 'title': title,
                 'date': ann.get('announcementTime', ''),
-                'pdf_url': f"http://static.cninfo.com.cn/{adj_url}",
+                'pdf_url': f"https://static.cninfo.com.cn/{adj_url}",
                 'announcement_id': ann.get('announcementId', ''),
                 'sec_code': ann.get('secCode', ''),
             })

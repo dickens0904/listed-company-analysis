@@ -1,3 +1,7 @@
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 # -*- coding: utf-8 -*-
 """
 thsdk_search.py — THSDK（同花顺Python SDK）轻量封装 v2
@@ -164,7 +168,8 @@ def df_to_records(df, max_rows: int = 100) -> List[Dict]:
                 try:
                     df[col] = pd.to_datetime(df[col], errors='coerce')
                     df[col] = df[col].dt.strftime('%Y-%m-%d %H:%M:%S').fillna('')
-                except Exception:
+                except Exception as _sexc:
+                    record(__name__, 'df_to_records', _sexc, note='静默降级')
                     pass
     
     # 替换NaN和uint32最大值(4294967295 = 游客无权限标记)

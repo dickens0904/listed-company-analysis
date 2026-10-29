@@ -1,0 +1,97 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>上市公司分析 Skill · 完整检测报告 2026-10-20</title>
+<style>
+:root{--ink:#1a1d21;--ink2:#4a5158;--ink3:#7b848c;--line:#e3e6ea;--line2:#f0f2f4;
+--bg:#fff;--bg2:#fafbfc;--red:#9c3d2e;--redbg:#fbf2f0;--amber:#8a6520;--amberbg:#faf6ee;--green:#2f6b5f;--greenbg:#f1f7f5}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg2);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;font-size:15px;line-height:1.75}
+.page{max-width:1040px;margin:0 auto;padding:44px 32px 96px;background:var(--bg)}
+header{border-bottom:2px solid var(--ink);padding-bottom:18px}
+h1{font-size:25px;margin:0 0 6px;font-weight:600;letter-spacing:-.2px}
+.sub{color:var(--ink3);font-size:13px;font-family:ui-monospace,Menlo,Consolas,monospace}
+.lede{margin:20px 0 26px;padding:14px 18px;background:var(--greenbg);border-left:3px solid var(--green);color:var(--ink2);font-size:14px;border-radius:0 4px 4px 0}
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:12px;margin:0 0 34px}
+.metric{border:1px solid var(--line);border-radius:6px;padding:11px 13px}
+.metric .k{font-size:11px;color:var(--ink3);margin-bottom:3px}
+.metric .v{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums}
+h2{font-size:18px;font-weight:600;margin:36px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+h3{font-size:15px;font-weight:600;margin:22px 0 8px}
+table{width:100%;border-collapse:collapse;font-size:13px;margin:10px 0 4px}
+th{text-align:left;padding:9px 10px;background:var(--bg2);border-bottom:1px solid var(--line);font-weight:600;font-size:12px;color:var(--ink2)}
+td{padding:9px 10px;border-bottom:1px solid var(--line2);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:3px;white-space:nowrap;font-weight:600}
+.tag.red{background:var(--redbg);color:var(--red)}
+.tag.amber{background:var(--amberbg);color:var(--amber)}
+.tag.gray{background:var(--line2);color:var(--ink3)}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--ink2)}
+.hl{color:var(--green);font-weight:600}
+.kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:12px}
+.kpi div{border:1px solid var(--line);border-radius:6px;padding:12px 14px;background:var(--bg2)}
+.kpi .l{font-size:11px;color:var(--ink3);margin-bottom:4px}
+.kpi .n{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
+.warn{margin:14px 0;padding:12px 16px;background:var(--redbg);border-radius:6px;border:1px solid #f0dedb;font-size:13.5px}
+.warn b{color:var(--red)}
+footer{margin-top:42px;padding-top:16px;border-top:1px solid var(--line);font-size:12px;color:var(--ink3);line-height:1.8}
+@media print{body{background:#fff;font-size:11pt}.page{max-width:none;padding:0}table{font-size:8.5pt}}
+</style></head><body><div class="page">
+<header>
+<h1>上市公司分析 Skill · 完整检测报告</h1>
+<div class="sub">标的 002180 奔图科技 ｜ 检测时间 2026-10-20 09:48 ｜ 检测范围：37 维度全链</div>
+</header>
+
+<div class="lede">检测不只验证「跑没跑通」，而是逐维追查<b>数字可不可信</b>。本轮发现 <b>14 类缺陷</b>，其中 <b>P0 六项</b>——
+最严重的是<b>商誉被凭空估算（低估 8.5 倍）</b>与<b>MA 评分因编造数据拿到满分</b>。全部已修复并复验。</div>
+
+<div class="metrics"><div class="metric"><div class="k">分析维度</div><div class="v">37 个</div></div><div class="metric"><div class="k">数据体积</div><div class="v">3.5 MB</div></div><div class="metric"><div class="k">红灯阻断</div><div class="v">无</div></div><div class="metric"><div class="k">投资建议</div><div class="v">可出</div></div><div class="metric"><div class="k">公告全文</div><div class="v">204 条</div></div></div>
+
+<h2>一、P0 / P1 / P2 缺陷清单（14 项，全部已修）</h2>
+<table>
+<tr><th>级别</th><th>问题</th><th>根因</th><th>修复方式</th><th>效果</th></tr>
+<tr><td><span class="tag red">🔴 P0</span></td><td><b>ma_deep 维度整体作废</b></td><td class="mono">`_extract_counterparty` 第 2 个正则 `(?:收购|购买)` **无捕获组**却调 `group(1)` → IndexError 被上层吞成「no such group」→ deals=0</td><td>补捕获组 + `match.lastindex` 防御</td><td class="hl">维度空壳 → 185 笔交易</td></tr><tr><td><span class="tag red">🔴 P0</span></td><td><b>商誉凭空编造（低估 8.5 倍）</b></td><td class="mono">`total_goodwill = total_assets * 0.1` 是假设值，比率恒为 10.0 → 减值风险判「低」+30 分</td><td>改从年报 `goodwill` 段抽「合计」真实值，比率改按**净资产**</td><td class="hl">15.98 亿 → **135.09 亿**；风险 低 → **高**</td></tr><tr><td><span class="tag red">🔴 P0</span></td><td><b>MA 评分满分虚高</b></td><td class="mono">数据缺失项默认满分 + 整体风险「高」无封顶 → 002180 拿 100 分</td><td>缺失项不计分 + 高风险封顶 69</td><td class="hl">100 → **69**</td></tr><tr><td><span class="tag red">🔴 P0</span></td><td><b>DCF 用假基准（100 亿营收）</b></td><td class="mono">`revenue=100.0` / `net_margin=10.0` 兜底；且 records 被 EPS 数据覆盖</td><td>改用财务 records；取不到即标 `data_missing`，拒绝估值</td><td class="hl">100 亿/10% → **45.64 亿/1.91%**</td></tr><tr><td><span class="tag red">🔴 P0</span></td><td><b>earnings_forecast 永远 insufficient</b></td><td class="mono">读 `fin.get("revenue")` 顶层字段（不存在），且日期字段是 `REPORTDATE` 不是 `REPORT_DATE` → 营收期数=0</td><td>改遍历 `financial.records` 取多年营收/净利</td><td class="hl">目标价不可算 → **三档情景全出数**</td></tr><tr><td><span class="tag red">🔴 P0</span></td><td><b>2026 半年报当年度值</b></td><td class="mono">45.64 亿半年营收混入年度序列，紧接 2025 年报 165.15 亿 → CAGR 断崖</td><td>只认 12-31 年报；当年无年报则排除并标注</td><td class="hl">排除 [2026]</td></tr><tr><td><span class="tag amber">🟡 P1</span></td><td><b>三档情景被压平</b></td><td class="mono">`clamp(cagr+adj)` 顺序错误，极端 CAGR 下三档全被压到 -10%</td><td>先 clamp 基准再加情景偏移</td><td class="hl">三档相同 → **143.7 / 148.6 / 153.6 亿**</td></tr><tr><td><span class="tag amber">🟡 P1</span></td><td><b>关联供应商占比臆造 50%</b></td><td class="mono">文本出现「关联」二字就写 `related_supplier_ratio = 50.0`</td><td>改为 None + 标注「占比未披露，不估算」</td><td class="hl">50.0% → **未披露**</td></tr><tr><td><span class="tag amber">🟡 P1</span></td><td><b>质押口径高估 6.6 倍</b></td><td class="mono">风控扫描的「股权质押 46 条」是**历史累计含已解除**，被当「在押」渲染</td><td>累计维度加标注；叙事优先走明细来源</td><td class="hl">46 → **7 条在押**</td></tr><tr><td><span class="tag amber">🟡 P1</span></td><td><b>专利统计口径错</b></td><td class="mono">只从 30 条样本统计，未用工具返回的 100 条分布</td><td>预聚合分布优先于样本</td><td class="hl">在权 12 → **37**</td></tr><tr><td><span class="tag amber">🟡 P1</span></td><td><b>协同/风险因素重复</b></td><td class="mono">Lexmark 在 for 循环内 append、法律风险每笔交易都加一条</td><td>去重 + 全量只记一次</td><td class="hl">重复 4 次 → 1 条</td></tr><tr><td><span class="tag gray">⚪ P2</span></td><td><b>正则同类隐患</b></td><td class="mono">`unlisted_company.py` 无捕获组却 `group(1)`</td><td>AST 扫描全仓 4 处，修 1 处真 bug</td><td class="hl">已修</td></tr><tr><td><span class="tag amber">🟡 P1</span></td><td><b>战略叙事用模板套话</b></td><td class="mono">`vision` 硬编码「致力于成为行业领先的综合性企业集团」，002180（打印机/芯片）被写成"综合性企业集团"</td><td>改从年报 MD&amp;A 展望取原文；取不到标「未披露」</td><td class="hl">"综合性企业集团" → **真实行业口径 + 同业排名**</td></tr><tr><td><span class="tag gray">⚪ P2</span></td><td><b>outlook 拼接残句</b></td><td class="mono">`f" 在{industry_name}领域，"` 中 industry_name 为 None → 输出「在领域，」</td><td>兼容 csrc_industry；取不到则不拼该分句</td><td class="hl">已修</td></tr>
+</table>
+
+<div class="warn"><b>共同特征</b>：这些缺陷<b>都不报错</b>——它们产出的是「看起来合理的数字」。
+商誉 15.98 亿、MA 100 分、DCF 估值区间、关联供应商 50%，
+单看都像真的，只有拿年报原始数字对一遍才会露馅。<b>静默错误比崩溃危险得多。</b></div>
+
+<h2>二、修复后的核心指标（实时读取，非手写）</h2>
+<div class="kpi">
+<div><div class="l">股价 / 市值</div><div class="n">15.36 元 / 218.4 亿</div></div>
+<div><div class="l">PE(TTM) / PB / PS</div><div class="n">-68.4 / 2.38 / 2.5</div></div>
+<div><div class="l">真实商誉</div><div class="n">135.09 亿元</div></div>
+<div><div class="l">商誉占净资产</div><div class="n">146.2%（风险 高）</div></div>
+<div><div class="l">MA 评分 / 交易笔数</div><div class="n">69 分 / 185 笔</div></div>
+<div><div class="l">DCF 基准营收 / 净利率</div><div class="n">45.64 亿 / 1.91%</div></div>
+<div><div class="l">实际控制人</div><div class="n">汪东颖（总持股 10.2945%）</div></div>
+<div><div class="l">失信 / 被执行 / 质押在押</div><div class="n">0 / 0 / 7 条</div></div>
+<div><div class="l">专利在权 / 放弃</div><div class="n">37 / 51</div></div>
+<div><div class="l">商标已注册 / 无效</div><div class="n">9 / 4</div></div>
+</div>
+
+<h2>三、剩余局限（已确认原因，非遗漏）</h2>
+<table>
+<tr><th>项</th><th>维度</th><th>原因</th><th>建议</th></tr>
+<tr><td><b>研发费用未取到</b></td><td>rd_analysis</td><td>年报 `rd_spending` 段 PDF 表格解析乱码（"文本乱码，已从PDF表格提取"），东财接口不含研发字段</td><td>需改进 PDF 表格解析，或接 MCP 财务接口</td></tr><tr><td><b>缺同业 PE → 目标价仅 DCF</b></td><td>earnings_forecast</td><td>`industry_peers` 为空，PE 相对估值被主动阻断（拒绝默认 20 倍）</td><td>补 dzh-mcp `getBlockIndustryObj` 同业行情</td></tr><tr><td><b>申万行业字段为空</b></td><td>industry</td><td>数据源只给证监会行业（制造业-计算机通信电子），无申万分类</td><td>可接受（已有证监会口径）</td></tr><tr><td><b>部分期次 EPS/股息率缺失</b></td><td>financial</td><td>半年报不披露股息率等年度指标，属正常</td><td>可接受</td></tr><tr><td><b>governance 1 处静默降级</b></td><td>scripts.governance</td><td>AKShare 质押接口偶发返回 None（单跑正常）</td><td>已登记在静默降级清单，不静默</td></tr>
+</table>
+
+<h2>四、结论</h2>
+<h3>数据可靠性</h3>
+<p>37 个维度全部有实质数据（无空壳），静默降级 1 处且已登记可见，
+红灯阻断 0、投资建议可出。<b>核心财务与估值口径已全部落到真实披露值。</b></p>
+
+<h3>对 002180 的判断（本轮数据修正后）</h3>
+<p><b>商誉是最大的风险点</b>：135.09 亿元商誉占归母净资产 <b>146.2%</b>——商誉超过净资产，
+一旦减值将直接侵蚀净资产。历史已发生 2 次商誉减值（合计约 3.6 亿元），
+但相对 135 亿存量只是零头。这也是 MA 评分从 100 降到 69 的主因。</p>
+<p>经营面：营收从 2024 年 264 亿降至 2025 年 165 亿（-37%），2026 上半年 45.64 亿继续承压；
+2025 年归母净亏 7.18 亿。DCF 按真实净利率 1.91% 算出的估值远低于市值，
+但这主要是<b>简化 DCF 对低净利率 + 高商誉结构的固有失真</b>，不宜单独作为估值依据。</p>
+
+<footer>
+检测方法：静态 AST 扫描（129 模块导入体检 + 正则捕获组专项）· 逐维数据实质检查（空壳/错误/空数组/None/硬编码比率）·
+口径矛盾校验（风险评级 vs 评分、历史累计 vs 当前在册）· 端到端实跑（35 维度 19 分钟）· MCP 实调回填（qcc 9 工具 + MinerU）。<br>
+所有修复均已复验：导入体检 129/129、分类器 25/25、红灯全清。
+</footer>
+</div></body></html>

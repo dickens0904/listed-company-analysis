@@ -4,28 +4,39 @@
 数据源: 东方财富行情API + RPT_LICO_FN_CPD（历史EPS）
 功能: 当前估值(PE/PB/PS/EV)、历史分位数、DCF框架、敏感性分析、估值结论
 """
-import sys, os, json
+import sys, os, json, time
+from datetime import datetime
 sys.stdout.reconfigure(encoding="utf-8")
 from scripts.safe_request import safe_get, safe_extract, safe_float
 
-EM_API = "http://datacenter-web.eastmoney.com/api/data/v1/get"
-EM_QUOTE = "http://push2.eastmoney.com/api/qt/stock/get"
-EM_VALUATION = "http://datacenter-web.eastmoney.com/api/data/v1/get"  # RPT_VALUEANALYSIS_DET
+EM_API = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+EM_QUOTE = "https://push2.eastmoney.com/api/qt/stock/get"
+EM_VALUATION = "https://datacenter-web.eastmoney.com/api/data/v1/get"  # RPT_VALUEANALYSIS_DET
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    "Referer": "http://data.eastmoney.com/",
+    "Referer": "https://data.eastmoney.com/",
     "Accept": "application/json",
 }
 QUOTE_FIELDS = "f43,f44,f45,f46,f47,f48,f50,f57,f58,f116,f117,f162,f167,f168,f169,f170,f171,f292"
 
 
-def _fetch_valuation_data(secucode):
-    """从datacenter获取最新估值数据（PE/PB/PS）— 主数据源"""
-    # 已验证可用列: SECUCODE, TRADE_DATE, SECURITY_NAME_ABBR, CLOSE_PRICE, PE_TTM, PB_MRQ, PS_TTM
-    # 注意: PE_DYNAMIC, CIRCULATING_MARKET_CAP 等列不存在
+def _fetch_valuation_data(secucode, retries: int = 3):
+    """
+    从 datacenter-web 获取最新估值数据（PE/PB/PS/市值）— 主数据源。
+
+    2026-10-19 审计修复（三处）：
+      1) **重试**：原版单次请求、失败即 None。实跑出现「⚠️ 连接失败 ×3」
+         → valuation 无数据 → earnings_forecast insufficient → 触发 advice_blocked。
+      2) **补市值字段**：改用 columns=ALL，实测同一接口直接返回
+         TOTAL_MARKET_CAP / NOTLIMITED_MARKETCAP_A（217.69 亿 / 210.72 亿），
+         **不必再依赖 push2 行情域**（该域在部分网络环境被墙，http/https 均 ProxyError）。
+      3) **失败登记**：连续失败写入 silenced_errors，报告「静默降级清单」可见。
+    注：scheme 已由 http 升级 https（http 经本机代理 ProxyError）。
+    """
     params = {
         "reportName": "RPT_VALUEANALYSIS_DET",
-        "columns": "SECUCODE,TRADE_DATE,SECURITY_NAME_ABBR,CLOSE_PRICE,PE_TTM,PB_MRQ,PS_TTM",
+        "columns": ("SECUCODE,TRADE_DATE,SECURITY_NAME_ABBR,CLOSE_PRICE,"
+                    "PE_TTM,PB_MRQ,PS_TTM,TOTAL_MARKET_CAP,NOTLIMITED_MARKETCAP_A"),
         "filter": f'(SECUCODE="{secucode}")',
         "pageSize": 1,
         "sortColumns": "TRADE_DATE",
@@ -33,10 +44,27 @@ def _fetch_valuation_data(secucode):
         "source": "WEB",
         "client": "WEB",
     }
-    raw = safe_get(EM_VALUATION, params=params, headers=HEADERS, timeout=20)
-    records = safe_extract(raw, ["result", "data"], default=[])
-    if records and len(records) > 0:
-        return records[0]
+    last_exc = None
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            raw = safe_get(EM_VALUATION, params=params, headers=HEADERS, timeout=20)
+            records = safe_extract(raw, ["result", "data"], default=[])
+            if records and len(records) > 0:
+                rec = dict(records[0])
+                rec['_meta'] = {'source_url': EM_VALUATION, 'attempts': attempt,
+                                'retrieved_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                return rec
+            last_exc = RuntimeError(f'空结果（datacenter 返回无数据，尝试 {attempt} 次）')
+        except Exception as e:          # noqa: BLE001 - 需兜住全部网络异常
+            last_exc = e
+        if attempt < retries:
+            time.sleep(1.2 * attempt)    # 递增退避
+    try:
+        from scripts.silenced_errors import record_result
+        record_result(__name__, '_fetch_valuation_data', last_exc,
+                      result={}, note=f'估值主源连续 {retries} 次失败')
+    except Exception:                   # noqa: BLE001
+        pass
     return None
 
 
@@ -163,13 +191,29 @@ def fetch_valuation(stock_code, market="a", data_dir=None, records=None, financi
             "ps": val_data.get("PS_TTM"),
         }
         result["valuation_source"] = "datacenter_RPT_VALUEANALYSIS_DET"
+        # 🔴 2026-10-19：市值直接从主源取（columns=ALL 已含该字段），
+        # 不必再走 push2（该域在部分网络环境被墙）。
+        tmc = safe_float(val_data.get("TOTAL_MARKET_CAP"))
+        nmc = safe_float(val_data.get("NOTLIMITED_MARKETCAP_A"))
+        if tmc:
+            result["current"]["market_cap_亿"] = round(tmc / 1e8, 2)
+        if nmc:
+            result["current"]["float_market_cap_亿"] = round(nmc / 1e8, 2)
     
     # 补全市值（datacenter无市值字段，需从行情API获取）
+    # 2026-10-19：原版只走 push2.eastmoney，实测该域在部分网络环境**被墙**
+    # （http/https 均 ProxyError）→ 市值永远拿不到。现加**腾讯 qt 备源**
+    # （实测 200 可用，字段第 44 位为总市值/流通市值，单位万元）。
     if not result["current"].get("market_cap_亿"):
-        params_q = {"secid": f"{mid}.{plain}", "fields": "f43,f116,f117", "ut": "fa1fd612f2f5e7b0"}
-        raw_q = safe_get(EM_QUOTE, params=params_q, headers=HEADERS, timeout=15)
-        qdata = safe_extract(raw_q, ["data"], {})
-        if qdata:
+        params_q = {"secid": f"{mid}.{plain}", "fields": "f43,f116,f117",
+                    "ut": "fa1fd612f2f5e7b0"}
+        qdata = {}
+        try:
+            raw_q = safe_get(EM_QUOTE, params=params_q, headers=HEADERS, timeout=15)
+            qdata = safe_extract(raw_q, ["data"], {}) or {}
+        except Exception:                      # noqa: BLE001
+            qdata = {}
+        if qdata and qdata.get('f116'):
             def fval(key, divisor=1):
                 v = qdata.get(key)
                 if v is None or str(v) in ["-", ""]:
@@ -184,6 +228,29 @@ def fetch_valuation(stock_code, market="a", data_dir=None, records=None, financi
                 "float_market_cap_亿": round(fval("f117", 1) / 1e8, 2) if fval("f117") else None,
             })
             result["valuation_source"] = result.get("valuation_source", "") + "+quote_api"
+        else:
+            # ── 备源：腾讯 qt.gtimg.cn（**只取价格/名称，不取市值**）──
+            # 实测结论（2026-10-19）：腾讯 qt 返回 88 字段中**不含总市值**
+            # （[44]=210.03、[45]=216.98 实为涨跌幅/其他指标，绝非市值——踩过坑）。
+            # 市值主源已改为 datacenter 的 TOTAL_MARKET_CAP，此处仅补价格与名称。
+            try:
+                prefix = {"1": "sh", "0": "sz"}.get(str(mid), "sz")
+                r = safe_get(f"https://qt.gtimg.cn/q={prefix}{plain}",
+                             headers={"User-Agent": HEADERS["User-Agent"]}, timeout=12)
+                txt = r.text if hasattr(r, 'text') else str(r or '')
+                if '~' in txt:
+                    f = txt.split('"')[1].split('~')
+                    # 字段：1=名称 3=最新价（实测确认）
+                    result["current"].setdefault(
+                        "price", safe_float(f[3]) if len(f) > 3 else None)
+                    if not result["current"].get("company_name") and len(f) > 1:
+                        result["current"]["company_name"] = f[1]
+                    result["valuation_source"] = (result.get("valuation_source", "")
+                                                 + "+tencent_qt_price")
+                    result["warnings"].append(
+                        "push2 行情域不可用；收盘价取自腾讯 qt。市值请以 datacenter 字段为准。")
+            except Exception as e:             # noqa: BLE001
+                result["warnings"].append(f"价格备源失败(腾讯qt): {str(e)[:60]}")
 
     # 如果东财API失败，使用财报数据+股价计算估值
     if not result["current"].get("pe_ttm") and financial_data:
@@ -247,7 +314,15 @@ def fetch_valuation(stock_code, market="a", data_dir=None, records=None, financi
                 }
 
     # 3. DCF框架
-    result["dcf"] = _build_dcf(records, result["current"])
+    # 🔴 2026-10-20 修复：原来直接把 `records` 传进去，但此处的 records 是
+    #   RPT_LICO_FN_CPD 的 **EPS/ROE 记录**（只有 BASIC_EPS/WEIGHTAVG_ROE），
+    #   里面**没有营收/净利** → `_build_dcf` 取不到 TOTAL_OPERATE_INCOME，
+    #   静默退回默认值 `revenue=100.0亿 / net_margin=10.0%` →
+    #   实测 002180 用「100 亿营收、10% 净利率」算 DCF，而真实是 45.64 亿营收、
+    #   1.91% 净利率 → DCF 估值完全失真。
+    #   现改为优先用 financial_data 里的财务 records（含营收/净利/同比）。
+    _dcf_records = ((financial_data or {}).get('records') or records or [])
+    result["dcf"] = _build_dcf(_dcf_records, result["current"])
 
     # 4. 敏感性分析
     result["sensitivity"] = _sensitivity_table(result["dcf"])
@@ -263,34 +338,76 @@ def fetch_valuation(stock_code, market="a", data_dir=None, records=None, financi
 
 
 def _build_dcf(records, current):
-    """简化DCF框架"""
+    """简化DCF框架
+
+    🔴 2026-10-20 修复「编造基准数据」：
+      旧版在取不到营收/净利时用 `revenue = 100.0`、`net_margin = 10.0` 兜底，
+      等于**凭空假设**一家公司的营收规模与盈利能力，然后据此算 DCF 并给估值区间。
+      实测 002180 真实营收 45.64 亿 / 净利率 1.91%，却用 100 亿 / 10% 算，
+      估值偏离极大。现改为：取不到就置 None 并标 `data_missing`，
+      下游 `_valuation_conclusion` 据此拒绝出结论（而不是给一个假数）。
+    """
     ystz_vals = []
     if records:
         for r in records[:8]:
             v = safe_float(r.get("YSTZ"))
             if v is not None:
                 ystz_vals.append(v)
-    avg_growth = sum(ystz_vals) / len(ystz_vals) if ystz_vals else 5.0
-    growth_rate = max(min(avg_growth, 30), -10)
+    avg_growth = sum(ystz_vals) / len(ystz_vals) if ystz_vals else None
+    if avg_growth is None:
+        growth_rate = None
+    else:
+        # 增速做合理区间约束（-30% ~ +30%），避免极端同比把 DCF 拉飞
+        growth_rate = max(min(avg_growth, 30), -30)
 
     latest_rev = safe_float(records[0].get("TOTAL_OPERATE_INCOME", 0)) if records else 0
-    revenue = latest_rev / 1e8 if latest_rev else 100.0
+    revenue = latest_rev / 1e8 if latest_rev else None
 
-    net_margin = 10.0
+    net_margin = None
     if records and safe_float(records[0].get("TOTAL_OPERATE_INCOME")):
         np0 = safe_float(records[0].get("PARENT_NETPROFIT", 0)) or 0
         rev0 = safe_float(records[0].get("TOTAL_OPERATE_INCOME", 1)) or 1
         net_margin = round(np0 / rev0 * 100, 2)
 
+    # 关键输入缺失 → 不做 DCF，标记缺口（不猜）
+    if revenue is None or net_margin is None:
+        return {
+            'data_missing': True,
+            'missing_reason': ('缺' + ('营收' if revenue is None else '')
+                               + ('/' if revenue is None and net_margin is None else '')
+                               + ('净利率' if net_margin is None else '')
+                               + '，拒绝用默认值估算 DCF'),
+            'wacc_pct': None, 'terminal_g_pct': None,
+            'revenue_base_亿': revenue, 'net_margin_pct': net_margin,
+            'fcf0_亿': None, 'growth_rate_pct': growth_rate,
+            'fcf_forecast': [], 'terminal_value_亿': None,
+            'terminal_pv_亿': None, 'dcf_value_亿': None,
+            'dcf_vs_market_pct': None,
+        }
+
     wacc = 9.0
     terminal_g = 2.5
+    # 净利率为负（亏损）时 FCF 为负，DCF 无经济意义 → 一并标缺口
+    if net_margin <= 0:
+        return {
+            'data_missing': True,
+            'missing_reason': f'净利率 {net_margin}%（亏损），DCF 不适用，应改用 PS/PB 或可比交易法',
+            'wacc_pct': wacc, 'terminal_g_pct': terminal_g,
+            'revenue_base_亿': round(revenue, 2), 'net_margin_pct': net_margin,
+            'fcf0_亿': None, 'growth_rate_pct': growth_rate,
+            'fcf_forecast': [], 'terminal_value_亿': None,
+            'terminal_pv_亿': None, 'dcf_value_亿': None,
+            'dcf_vs_market_pct': None,
+        }
+
+    gr = growth_rate if growth_rate is not None else 0.0
     fcf0 = revenue * net_margin / 100 * 0.85
 
     fcf_forecast = []
     for y in range(1, 6):
-        fcf_y = fcf0 * ((1 + growth_rate / 100) ** y)
+        fcf_y = fcf0 * ((1 + gr / 100) ** y)
         pv = fcf_y / ((1 + wacc / 100) ** y)
-        fcf_forecast.append({"year": y, "fcf_亿": round(fcf_y, 1), "pv_亿": round(pv, 1)})
+        fcf_forecast.append({"year": y, "fcf_亿": round(fcf_y, 2), "pv_亿": round(pv, 2)})
 
     terminal_fcf = fcf_forecast[-1]["fcf_亿"] * (1 + terminal_g / 100) / (wacc / 100 - terminal_g / 100)
     terminal_pv = terminal_fcf / ((1 + wacc / 100) ** 5)
@@ -299,9 +416,10 @@ def _build_dcf(records, current):
     mkt_cap = current.get("market_cap_亿") or 0
 
     return {
+        "data_missing": False,
         "wacc_pct": wacc, "terminal_g_pct": terminal_g,
-        "revenue_base_亿": round(revenue, 1), "net_margin_pct": net_margin,
-        "fcf0_亿": round(fcf0, 1), "growth_rate_pct": round(growth_rate, 1),
+        "revenue_base_亿": round(revenue, 2), "net_margin_pct": net_margin,
+        "fcf0_亿": round(fcf0, 2), "growth_rate_pct": round(gr, 2),
         "fcf_forecast": fcf_forecast,
         "terminal_value_亿": round(terminal_fcf, 1), "terminal_pv_亿": round(terminal_pv, 1),
         "dcf_value_亿": round(equity_value, 1),

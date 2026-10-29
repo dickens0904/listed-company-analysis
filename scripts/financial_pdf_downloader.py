@@ -13,6 +13,10 @@ import requests
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
 # ============================================
 # SEC EDGAR配置（美股）
@@ -67,7 +71,8 @@ def download_us_10k_pdf(ticker: str, output_dir: str, years: int = 1) -> Dict:
             if r.status_code == 200:
                 data = r.json()
                 cik = str(data.get('cik', '')).zfill(10)
-        except:
+        except Exception as _sexc:
+            record(__name__, 'download_us_10k_pdf', _sexc, note='静默降级')
             pass
     
     if not cik:
@@ -149,7 +154,8 @@ def download_us_10k_pdf(ticker: str, output_dir: str, years: int = 1) -> Dict:
                                 if name.lower().endswith('.pdf'):
                                     pdf_url = f"{base_url}/{name}"
                                     break
-                except:
+                except Exception as _sexc:
+                    record(__name__, 'download_us_10k_pdf', _sexc, note='静默降级')
                     pass
             
             # 如果JSON目录失败，尝试HTML目录
@@ -168,7 +174,8 @@ def download_us_10k_pdf(ticker: str, output_dir: str, years: int = 1) -> Dict:
                                     break
                             if not pdf_url:
                                 pdf_url = f"{base_url}/{pdf_matches[0]}"
-                except:
+                except Exception as _sexc:
+                    record(__name__, 'download_us_10k_pdf', _sexc, note='静默降级')
                     pass
             
             if pdf_url:

@@ -6,6 +6,10 @@ import urllib.parse
 import ssl
 from datetime import datetime, timedelta
 import time
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
 # CIK映射
 CIK_MAP = {
@@ -87,7 +91,8 @@ def fetch_market_cap(ticker):
             data = json.loads(resp.read())
             if data:
                 return data[0]
-    except:
+    except Exception as _sexc:
+        record(__name__, 'fetch_market_cap', _sexc, note='静默降级')
         pass
     return {'note': '市值数据需付费API'}
 

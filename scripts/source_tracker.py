@@ -44,6 +44,10 @@ import json
 import time
 from datetime import datetime
 from typing import Any, Callable, Optional, List, Dict, Tuple
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
 # ============================================================
 # 溯源常量
@@ -98,21 +102,43 @@ class SourceTracker:
     def _cache_path(self, cache_key: str) -> str:
         return os.path.join(self.data_dir, cache_key)
 
-    def read_cache(self, cache_key: str) -> Optional[Dict]:
-        """读本地缓存，有则返回，无则None"""
+    def read_cache(self, cache_key: str, cache_ttl_hours: int = None) -> Optional[Dict]:
+        """读本地缓存，有则返回，无则None
+
+        2026-10-16 审计修复（P1）：真正校验 TTL。
+        旧版只判断文件是否存在，cache_ttl_hours 参数传入却从未使用，
+        导致一次抓取成功后缓存可永久命中 → 旧数据当新数据用，
+        直接触发"跨期数据不拼接却自然拼接"风险。
+
+        Args:
+            cache_key: 缓存文件名
+            cache_ttl_hours: 有效期（小时）。None 表示不过期（显式要求）。
+                             传入值 >0 时，超过有效期视为未命中。
+        """
         path = self._cache_path(cache_key)
-        if os.path.exists(path):
-            try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                # 标注来源
-                data['_meta'] = data.get('_meta', {})
-                data['_meta']['source'] = 'local_cache'
-                data['_meta']['cache_file'] = path
-                data['_meta']['cached_at'] = data.get('_meta', {}).get('fetched_at', 'unknown')
-                return data
-            except Exception:
-                return None
+        if not os.path.exists(path):
+            return None
+        try:
+            # ── TTL 校验：以文件 mtime 为准（写缓存即更新时间戳）──
+            if cache_ttl_hours is not None and cache_ttl_hours > 0:
+                age_hours = (time.time() - os.path.getmtime(path)) / 3600.0
+                if age_hours > cache_ttl_hours:
+                    self._log(cache_key, 'local_cache', 'EXPIRED',
+                              f'缓存过期({age_hours:.1f}h > {cache_ttl_hours}h)，需重新抓取')
+                    return None
+
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            # 标注来源
+            data['_meta'] = data.get('_meta', {})
+            data['_meta']['source'] = 'local_cache'
+            data['_meta']['cache_file'] = path
+            data['_meta']['cached_at'] = data.get('_meta', {}).get('fetched_at', 'unknown')
+            data['_meta']['cache_age_hours'] = round(
+                (time.time() - os.path.getmtime(path)) / 3600.0, 2)
+            return data
+        except Exception:
+            return None
         return None
 
     def write_cache(self, cache_key: str, data: Dict, source: str = 'unknown'):
@@ -154,9 +180,9 @@ class SourceTracker:
         Returns:
             始终返回Dict，带 '_meta.source' 字段
         """
-        # Step 1: 读本地缓存
+        # Step 1: 读本地缓存（P1：真正传 TTL 进去校验）
         if cache_key:
-            cached = self.read_cache(cache_key)
+            cached = self.read_cache(cache_key, cache_ttl_hours=cache_ttl_hours)
             if cached:
                 self._log(dim, cached.get('_meta', {}).get('source', 'local_cache'),
                          'HIT', f'缓存命中: {cache_key}')
@@ -440,7 +466,8 @@ def download_announcement_pdf_traced(stock_code: str, market: str,
             doc.close()
             return {'pdf_path': path, 'source': 'local_pdf', 'source_label': '📁 本地缓存公告',
                     'page_count': page_count}
-        except Exception:
+        except Exception as _sexc:
+            record(__name__, 'download_announcement_pdf_traced', _sexc, note='静默降级')
             pass
 
     # 段2：直接传入URL下载

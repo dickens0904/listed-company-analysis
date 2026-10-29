@@ -12,6 +12,10 @@ import time
 import requests
 from datetime import datetime
 from typing import Dict, List, Optional
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
 SEC_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (QCLaw Investment Research contact@qclaw.com)',
@@ -38,25 +42,41 @@ TICKER_CIK_MAP = {
     'TME': '0001810806', 'IQ': '0001747940', 'FUTU': '0001836133',
 }
 
-# 关键财务科目映射
+# 关键财务科目映射（2026-10-21 修正：改为**候选列表**，按序命中）
+# 🔴 原实现每个科目只写一个 US-GAAP tag，其中 5 个是错的 → 实测 AAPL 13 个科目里
+#    没有 revenue（营收），连带毛利率/净利率/资产周转全部算不出。已纠错：
+#      revenue        : ...AssessedTaxes → ...AssessedTax（多打了个 es）
+#      capex          : CapitalExpenditures 不是 us-gaap 概念 → PaymentsToAcquirePropertyPlantAndEquipment
+#      dividends      : DividendsCash 不存在 → PaymentsOfDividends
+#      ocf            : CashFlowsFromUsedInOperatingActivities → NetCashProvidedByUsedInOperatingActivities
+#      depreciation   : Depreciation → DepreciationDepletionAndAmortization（更常见）
 KEY_ITEMS = {
-    'revenue': 'RevenueFromContractWithCustomerExcludingAssessedTaxes',
-    'net_income': 'NetIncomeLoss',
-    'total_assets': 'Assets',
-    'total_equity': 'StockholdersEquity',
-    'cash': 'CashAndCashEquivalentsAtCarryingValue',
-    'eps_basic': 'EarningsPerShareBasic',
-    'shares_outstanding': 'WeightedAverageNumberOfSharesOutstandingBasic',
-    'gross_profit': 'GrossProfit',
-    'operating_income': 'OperatingIncomeLoss',
-    'rd_expense': 'ResearchAndDevelopmentExpense',
-    'sga_expense': 'SellingGeneralAndAdministrativeExpense',
-    'total_debt': 'LongTermDebt',
-    'interest_expense': 'InterestExpense',
-    'depreciation': 'Depreciation',
-    'capex': 'CapitalExpenditures',
-    'dividends': 'DividendsCash',
-    'ocf': 'CashFlowsFromUsedInOperatingActivities',
+    'revenue': ('RevenueFromContractWithCustomerExcludingAssessedTax',
+                'RevenueFromContractWithCustomerIncludingAssessedTax',
+                'Revenues', 'SalesRevenueNet', 'SalesRevenueGoodsNet'),
+    'net_income': ('NetIncomeLoss', 'ProfitLoss'),
+    'total_assets': ('Assets',),
+    'total_equity': ('StockholdersEquity',
+                     'StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest'),
+    'cash': ('CashAndCashEquivalentsAtCarryingValue',
+             'CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents'),
+    'eps_basic': ('EarningsPerShareBasic',),
+    'shares_outstanding': ('WeightedAverageNumberOfSharesOutstandingBasic',
+                           'CommonStockSharesOutstanding'),
+    'gross_profit': ('GrossProfit',),
+    'operating_income': ('OperatingIncomeLoss',),
+    'rd_expense': ('ResearchAndDevelopmentExpense',),
+    'sga_expense': ('SellingGeneralAndAdministrativeExpense',),
+    'total_debt': ('LongTermDebt', 'LongTermDebtNoncurrent', 'DebtCurrent',
+                   'LongTermDebtAndCapitalLeaseObligations'),
+    'interest_expense': ('InterestExpense', 'InterestExpenseNonoperating'),
+    'depreciation': ('DepreciationDepletionAndAmortization',
+                     'DepreciationAmortizationAndAccretionNet', 'Depreciation'),
+    'capex': ('PaymentsToAcquirePropertyPlantAndEquipment',
+              'PaymentsToAcquireProductiveAssets'),
+    'dividends': ('PaymentsOfDividends', 'PaymentsOfDividendsCommonStock'),
+    'ocf': ('NetCashProvidedByUsedInOperatingActivities',
+            'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations'),
 }
 
 class SECXBRLAPI:
@@ -91,7 +111,8 @@ class SECXBRLAPI:
                 cik = str(data.get('cik', '')).zfill(10)
                 TICKER_CIK_MAP[ticker] = cik  # 缓存
                 return cik
-        except:
+        except Exception as _sexc:
+            record(__name__, 'get_cik', _sexc, note='静默降级')
             pass
         
         return None
@@ -145,9 +166,11 @@ class SECXBRLAPI:
             print(f"[OK] {result['company']} (CIK: {cik})")
             print(f"  可用科目: {len(us_gaap)} 个")
             
-            # 提取关键财务科目
-            for key, item_name in KEY_ITEMS.items():
-                if item_name in us_gaap:
+            # 提取关键财务科目（候选 tag 按序命中第一个存在的）
+            for key, item_names in KEY_ITEMS.items():
+                cands = (item_names,) if isinstance(item_names, str) else tuple(item_names)
+                item_name = next((c for c in cands if c in us_gaap), None)
+                if item_name:
                     item_data = us_gaap[item_name]
                     units = item_data.get('units', {})
                     
@@ -159,8 +182,10 @@ class SECXBRLAPI:
                     data_list = usd_data or shares_data or per_share_data
                     
                     if data_list:
-                        # 按日期排序，取最近5期
-                        data_list = sorted(data_list, key=lambda x: x.get('end', ''), reverse=True)[:5]
+                        # 按日期排序，保留最近 40 期（2026-10-21：原 5 期不够还原
+                        # 年度序列——us_records 要用 CY 年度 frame 拼 5 年年报；下游
+                        # get_latest 仍取 values[0]，语义不变）
+                        data_list = sorted(data_list, key=lambda x: x.get('end', ''), reverse=True)[:120]
                         
                         values = []
                         for d in data_list:
@@ -182,7 +207,8 @@ class SECXBRLAPI:
                             scale = 1e8 if abs(val) > 1e9 else 1e4
                             print(f"  {key}: {val/scale:.2f}{unit} ({latest['date'][:10]})")
                 else:
-                    result['warnings'].append(f'未找到科目: {key}')
+                    result['warnings'].append(
+                        f"未找到科目: {key}（候选: {', '.join(cands)}）")
             
             if result['financials']:
                 result['success'] = True

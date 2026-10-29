@@ -1,27 +1,23 @@
-# listed-company-analysis 依赖
-# 核心依赖
-requests==2.33.1          # HTTP请求
-pandas==3.0.2             # 数据处理
+# listed-company-analysis 依赖（2026-10-22 审计对齐）
+# 安装：pip install -r requirements.txt
+# 仅声明代码真实 import 的包；版本尽量用下限，避免锁定不存在的版本。
 
-# PDF处理（二选一，推荐PyMuPDF）
-PyMuPDF==1.27.2.2         # PDF全文提取（更快）
-pdfplumber==0.11.9        # PDF表格提取（备选）
-PyPDF2==3.0.1             # PDF提取备选
+# ── 核心（必需）──
+requests>=2.31,<3            # HTTP 请求
+pandas>=2.0,<3               # 表格处理（仅少数文件用；原 3.0.2 不存在，已修正）
+PyMuPDF>=1.24                # PDF 全文提取（import 名 fitz）
+pdfplumber>=0.11             # PDF 表格提取（备选）
+PyPDF2>=3.0                  # PDF 提取备选
+akshare>=1.14                # CSRC 辅导/港股财务等兜底数据
+openai>=1.50.0               # SenseNova API 客户端（AI 分析师）
+beautifulsoup4>=4.12         # HTML 解析（import 名 bs4，2026-10-22 补：原声明遗漏）
+httpx>=0.27                  # mx_data_provider 用（2026-10-22 补：原声明遗漏）
 
-# 金融数据
-akshare==1.18.53          # CSRC辅导数据/港股财务等
+# ── 可选 ──
+matplotlib>=3.7              # 结构图（仅结构图使用）
 
-# 可选依赖
-matplotlib==3.10.8        # 图表（仅结构图使用）
-
-# AI 分析（新增）
-openai>=1.50.0            # 商汤 API 客户端
-
-# 反检测浏览器（CloakBrowser）
-# CloakBrowser是高级反检测浏览器，可以绕过所有机器人检测
-# pip install cloakbrowser - 自动下载Chromium二进制
-cloakbrowser>=0.3.28      # 高级反检测浏览器
-
-# Playwright + Stealth（备选方案）
-playwright>=1.40.0        # 浏览器自动化
-playwright-stealth>=1.0.6 # Playwright反检测插件
+# ── 外部二进制 / 私有包（非 PyPI，按需手动装）──
+# cloakbrowser>=0.3.28      # 反检测浏览器（gsxt_crawler 用，缺则降级）
+# playwright>=1.40.0        # 浏览器自动化（hkex_announcements / gsxt_crawler 用，缺则降级）
+# playwright-stealth>=1.0.6 # Playwright 反检测插件
+# thsdk==1.7.18             # 同花顺私有 SDK（不在 PyPI；路径由环境变量 THSDK_PATH 指定，非主流程）

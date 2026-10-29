@@ -9,6 +9,10 @@ from datetime import datetime
 sys.stdout.reconfigure(encoding='utf-8')
 
 from scripts.safe_request import safe_get, safe_post
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
 # ─────────────────────────────────────────────
 # 辅助函数
@@ -35,7 +39,10 @@ def _parse_amount(s):
     m = re.search(r'([\d.]+)\s*万', s)
     if m:
         return float(m.group(1)) / 10000
-    m = re.search(r'^[\d.]+$', s)
+    # 2026-10-20 修复：原 `re.search(r'^[\d.]+$', s)` **无捕获组**却调用
+    # group(1) → IndexError: no such group（同 ma_deep 那类 bug）。
+    # 补捕获组即可；纯数字串本身就是要取的值。
+    m = re.search(r'^([\d.]+)$', s)
     if m:
         v = float(m.group(1))
         return v if v > 100 else v / 10000  # 假设 > 100万是小单位
@@ -125,7 +132,8 @@ def fetch_basic_info(company_name, data_dir=None):
                     data = resp2.json()
                     result['iwencai'] = data
                     result['source'] = 'iwencai_fallback'
-        except Exception:
+        except Exception as _sexc:
+            record(__name__, 'fetch_basic_info', _sexc, note='静默降级')
             pass
 
     return result
@@ -223,7 +231,8 @@ def fetch_financing_history(company_name, data_dir=None):
             try:
                 data = resp2.json()
                 result['xiniu'] = data
-            except Exception:
+            except Exception as _sexc:
+                record(__name__, 'fetch_financing_history', _sexc, note='静默降级')
                 pass
     except Exception as e:
         result['xiniu_error'] = str(e)
@@ -247,7 +256,8 @@ def fetch_financing_history(company_name, data_dir=None):
                             'investors': item.get('investors', ''),
                             'source': '36kr'
                         })
-            except Exception:
+            except Exception as _sexc:
+                record(__name__, 'fetch_financing_history', _sexc, note='静默降级')
                 pass
     except Exception as e:
         result['kr36_error'] = str(e)
@@ -544,7 +554,8 @@ def fetch_ipo_status(company_name, data_dir=None):
             resp2 = safe_get(search_url, headers=_get_tianyancha_headers(), timeout=8)
             if resp2 and resp2.status_code == 200 and company_name[:4] in resp2.text:
                 result['regulator_searches'].append(name)
-        except Exception:
+        except Exception as _sexc:
+            record(__name__, 'fetch_ipo_status', _sexc, note='静默降级')
             pass
 
     # 方法3：烯牛数据IPO追踪
@@ -557,7 +568,8 @@ def fetch_ipo_status(company_name, data_dir=None):
             try:
                 data = resp3.json()
                 result['xiniu_ipo'] = data
-            except Exception:
+            except Exception as _sexc:
+                record(__name__, 'fetch_ipo_status', _sexc, note='静默降级')
                 pass
     except Exception as e:
         result['xiniu_error'] = str(e)

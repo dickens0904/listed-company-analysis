@@ -12,7 +12,12 @@
   - local_cache: 本地JSON缓存命中
 """
 import requests, json, os, re, sys
+import _ctxfix  # noqa: F401  （修正 pywin32 抢占 scripts 包名，见 _ctxfix.py）
 from scripts.safe_request import safe_get, safe_extract, safe_float
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
 # 溯源基础设施
 try:
@@ -33,10 +38,10 @@ except ImportError:
     def source_label(s):
         return SOURCE_LABELS.get(s, s)
 
-EM_API = 'http://datacenter-web.eastmoney.com/api/data/v1/get'
+EM_API = 'https://datacenter-web.eastmoney.com/api/data/v1/get'
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-    'Referer': 'http://data.eastmoney.com/',
+    'Referer': 'https://data.eastmoney.com/',
     'Accept': 'application/json',
 }
 
@@ -118,6 +123,21 @@ def fetch_financial_metrics(stock_code, market='a', data_dir=None,
     elif market == 'hk':
         secucode = stock_code + '.HK'
 
+    # 🔴 北交所迁码（2026-10-21 实测根因）：830799/835185 等 8/4 开头老代码在
+    # 东财新接口（RPT_LICO_FN_CPD）返回 0 条；同一公司 920xxx 新代码有 60+ 期。
+    # 解析到当前代码后再取数，否则 records=0 会连带盈利预测/SOTP/估值全挂。
+    bse_migrate_info = None
+    if market == 'a' and stock_code.startswith(('8', '4')) and not stock_code.startswith('920'):
+        try:
+            from bse_migrate import resolve_bse_code
+            bse_migrate_info = resolve_bse_code(stock_code)
+            if bse_migrate_info.get('switched') and bse_migrate_info.get('current_code'):
+                print(f"[北交所迁码] {stock_code} → {bse_migrate_info['current_code']}"
+                      f"（{bse_migrate_info.get('name')}）")
+                secucode = bse_migrate_info['current_code'] + '.BJ'
+        except Exception as _bse_exc:
+            print(f"[北交所迁码] 解析失败，按原代码继续: {_bse_exc}")
+
     params = {
         'reportName': 'RPT_LICO_FN_CPD',
         'columns': 'ALL',
@@ -132,7 +152,19 @@ def fetch_financial_metrics(stock_code, market='a', data_dir=None,
 
     try:
         raw_result = safe_get(EM_API, params=params, headers=HEADERS, timeout=20)
-        records = safe_extract(raw_result, ['result', 'data'], default=[])
+        records = safe_extract(raw_result, ['result', 'data'], default=[]) or []
+        # 🔴 2026-10-21：东财两个域名（datacenter-web / datacenter）可用性不同步，
+        # 实测有单次请求空返回（北交所 830799 某轮回 0 条）→ 换域名重试一次。
+        if not records:
+            _alt = EM_API.replace('datacenter-web.', 'datacenter.') \
+                if 'datacenter-web.' in EM_API else EM_API.replace('datacenter.', 'datacenter-web.')
+            try:
+                raw2 = safe_get(_alt, params=params, headers=HEADERS, timeout=20)
+                records = safe_extract(raw2, ['result', 'data'], default=[]) or []
+                if records:
+                    print(f"[重试] 换域名命中: {_alt.split('/')[2]}")
+            except Exception:
+                pass
         if records is None:
             records = []
         result['records'] = records
@@ -171,6 +203,14 @@ def fetch_financial_metrics(stock_code, market='a', data_dir=None,
                 return result
 
         result['latest'] = records[0]
+
+        # 迁码溯源：原始代码 ↔ 取数代码，供报告与质检核对
+        if bse_migrate_info and bse_migrate_info.get('switched'):
+            result['_meta']['bse_code'] = {
+                'input': stock_code,
+                'current': bse_migrate_info['current_code'],
+                'name': bse_migrate_info.get('name'),
+            }
 
         # ====== 补充资产负债表字段（Sina数据源） ======
         try:
@@ -321,7 +361,11 @@ def _get_audit_opinion(stock_code, data_dir, eps, roe):
     核心修复：sections["audit"]通常只含"审计意见 □是䯒否"勾选框，
     不是真正的审计意见正文。真正的意见在年报第2页（董事长致辞）。
     """
-    import fitz  # PyMuPDF
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        print(f"  ⚠️ PyMuPDF 未安装，跳过审计意见提取")
+        return {"opinion": "未提取(PyMuPDF未安装)", "basis": "跳过"}
     
     def _extract_from_pdf(pdf_path):
         """从PDF前20页提取审计意见（覆盖PyMuPDF换行问题）"""
@@ -372,7 +416,8 @@ def _get_audit_opinion(stock_code, data_dir, eps, roe):
                     opinion = _parse_audit_from_text(content)
                     if opinion:
                         return opinion
-            except:
+            except Exception as _sexc:
+                record(__name__, '_extract_from_pdf', _sexc, note='静默降级')
                 pass
         
         # === 优先级3：从annual_report_text.txt提取（覆盖提前创建的场景）===
@@ -384,7 +429,8 @@ def _get_audit_opinion(stock_code, data_dir, eps, roe):
                 opinion = _parse_audit_from_text(text)
                 if opinion:
                     return opinion
-            except:
+            except Exception as _sexc:
+                record(__name__, '_extract_from_pdf', _sexc, note='静默降级')
                 pass
     
     # 降级：从财务数据推断
@@ -449,13 +495,15 @@ def _parse_audit_from_text(text):
 
 
 def _infer_audit_opinion(eps, roe):
-    """从财务数据推断审计意见（不精确，仅作降级方案）"""
-    if eps is not None and eps < 0 and roe is not None and roe < 0:
-        return '非标准无保留意见（推断：净利润为负+ROE为负）'
-    elif eps is not None and eps < 0:
-        return '存在不确定性（推断：净利润为负）'
-    else:
-        return '标准无保留意见（推断）'
+    """审计意见**不得由财务指标推断**（2026-10-23 修）。
+
+    历史问题：按"EPS<0 且 ROE<0 → 非标准无保留意见"推断，实测把标准无保留意见的
+    万达信息（300168，2025 年报立信出具标准无保留）误标成"非标准无保留意见"。
+    亏损 ≠ 非标意见，二者是完全不同的事。
+
+    现改为：无真实提取时返回 None，由上层标注"未取到"，禁止编造。
+    """
+    return None
 
 
 def _extract_financial_from_pdf(stock_code, data_dir):
@@ -512,7 +560,8 @@ def _extract_financial_from_pdf(stock_code, data_dir):
             # 营收通常在亿级别（>100000000）
             if val > 100000000:
                 revenues.append(val)
-        except:
+        except Exception as _sexc:
+            record(__name__, '_extract_financial_from_pdf', _sexc, note='静默降级')
             pass
     
     # 净利润（千万到亿级别）
@@ -522,7 +571,8 @@ def _extract_financial_from_pdf(stock_code, data_dir):
             val = float(a.replace(',', ''))
             if 1000000 < val <= 100000000:
                 net_profits.append(val)
-        except:
+        except Exception as _sexc:
+            record(__name__, '_extract_financial_from_pdf', _sexc, note='静默降级')
             pass
     
     # 百分比通常是增速或比率
@@ -530,7 +580,8 @@ def _extract_financial_from_pdf(stock_code, data_dir):
     for p in percents:
         try:
             growth_rates.append(float(p))
-        except:
+        except Exception as _sexc:
+            record(__name__, '_extract_financial_from_pdf', _sexc, note='静默降级')
             pass
     
     # 构建记录（2025年最新一期）
@@ -663,7 +714,8 @@ def _download_and_extract_annual(stock_code, market='a', data_dir=None):
                     full_text += page.get_text('text') + '\n'
                 doc.close()
                 audit_text = full_text
-            except Exception:
+            except Exception as _sexc:
+                record(__name__, '_download_and_extract_annual', _sexc, note='静默降级')
                 pass
         if audit_text:
             result['audit_opinion'] = _parse_audit_from_text(audit_text)

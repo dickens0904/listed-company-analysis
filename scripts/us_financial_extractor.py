@@ -9,6 +9,10 @@ import pandas as pd
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
 # 常见财务科目映射（10-K HTML标签多样化，需多模式匹配）
 FINANCIAL_PATTERNS = {
@@ -186,7 +190,8 @@ def extract_financial_table_from_html(html: str, table_keywords: List[str]) -> p
             dfs = pd.read_html(f"<html><body>{table_html}</body></html>")
             if dfs:
                 return dfs[0]
-        except:
+        except Exception as _sexc:
+            record(__name__, 'extract_financial_table_from_html', _sexc, note='静默降级')
             pass
     
     return None

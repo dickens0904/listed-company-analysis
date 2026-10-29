@@ -16,10 +16,21 @@ def fetch_executives(stock_code, market='a', data_dir=None):
         'summary': {},
     }
 
+    # 北交所迁码（2026-10-21）：老代码需先迁到 920xxx 才能命中东财公告
+    _code = stock_code
+    if str(stock_code).startswith(('8', '4')) and not str(stock_code).startswith('920'):
+        try:
+            from bse_migrate import resolve_bse_code
+            _m = resolve_bse_code(stock_code)
+            if _m.get('switched') and _m.get('current_code'):
+                _code = _m['current_code']
+        except Exception:
+            pass
+
     # 从东方财富公告中识别高管变动
     url = (f"https://np-anotice-stock.eastmoney.com/api/security/ann"
            f"?cb=&sr=-1&page_size=200&page_index=1&ann_type=A"
-           f"&client_source=web&f_node=0&s_node=0&stock_list={stock_code}")
+           f"&client_source=web&f_node=0&s_node=0&stock_list={_code}")
     try:
         r = requests.get(url, headers={
             'User-Agent': 'Mozilla/5.0',
@@ -79,6 +90,9 @@ def fetch_executives(stock_code, market='a', data_dir=None):
     result['change_count'] = len(changes)
     result['summary'] = _summarize_exec(changes, incentives)
 
+    if market not in ('a', 'bse', 'cn'):
+        result['_gap'] = ('高管变动明细：港美股需港交所权益披露 / SEC 8-K 或 DEF 14A 解析；'
+                          '本 skill 暂无脚本源，禁止编造任免事项')
     return result
 
 

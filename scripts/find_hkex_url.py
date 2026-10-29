@@ -3,6 +3,10 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import re
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
 headers = {'User-Agent': 'Mozilla/5.0'}
 
@@ -40,7 +44,8 @@ for url in test_urls:
                 try:
                     data = resp.json()
                     print(f'  JSON键: {list(data.keys())[:5]}')
-                except:
+                except Exception as _sexc:
+                    record(__name__, '<module>', _sexc, note='静默降级')
                     pass
         
         print()

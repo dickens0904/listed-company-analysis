@@ -4,6 +4,10 @@ import json
 import os
 import time
 from datetime import datetime
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 
 
 def search_hkex_announcements(stock_code, max_results=20, headless=True):
@@ -36,7 +40,8 @@ def search_hkex_announcements(stock_code, max_results=20, headless=True):
             try:
                 page.locator('button:has-text("Accept"), a:has-text("Accept")').first.click(timeout=3000)
                 time.sleep(0.5)
-            except:
+            except Exception as _sexc:
+                record(__name__, 'search_hkex_announcements', _sexc, note='静默降级')
                 pass
             
             # 3. 输入股票代码并选择自动补全
@@ -60,7 +65,8 @@ def search_hkex_announcements(stock_code, max_results=20, headless=True):
                         break
                 if not selected and items:
                     items[0].click()
-            except:
+            except Exception as _sexc:
+                record(__name__, 'search_hkex_announcements', _sexc, note='静默降级')
                 pass
             
             time.sleep(1)
@@ -230,6 +236,100 @@ def download_annual_report(stock_code, save_dir, year=None, headless=True):
     print(f'下载年报: {target["title"]}')
     print(f'URL: {target["pdf_url"]}')
     return download_hkex_pdf(target['pdf_url'], save_path)
+
+
+def _hkex_stock_id(stock_code) -> str:
+    """港股代码 → 披露易内部 stockId（如 00700 → 7609）"""
+    import requests
+    code = str(stock_code).strip().zfill(5)
+    r = requests.get(
+        'https://www1.hkexnews.hk/search/prefix.do',
+        params={'callback': 'callback', 'lang': 'ZH', 'type': 'A',
+                'name': code, 'market': 'SEHK'},
+        headers={'User-Agent': 'Mozilla/5.0',
+                 'Referer': 'https://www1.hkexnews.hk/search/titlesearch.xhtml'},
+        timeout=20,
+    )
+    m = re.search(r'\((\{.*\})\)\s*;?\s*$', r.text.strip(), re.S)
+    if not m:
+        return None
+    try:
+        info = (json.loads(m.group(1)) or {}).get('stockInfo') or []
+    except Exception:
+        return None
+    for it in info:
+        if str(it.get('code', '')).zfill(5) == code:
+            return str(it.get('stockId'))
+    return str(info[0].get('stockId')) if info else None
+
+
+def fetch_hkex_annual_http(stock_code, years: int = 3) -> list:
+    """港交所年报清单（纯 HTTP，2026-10-21 新增）。
+
+    🔴 旧实现走 Playwright（`search_hkex_announcements`），实测在无头环境下返回空，
+    导致港股 annual_pdf 恒为 {}. 现改用披露易两个公开端点：
+      ① `search/prefix.do`         → stockId
+      ② `search/titleSearchServlet.do` → 公告 JSON（`result` 是字符串化 JSON）
+
+    ⚠️ 关键坑：**必须给 fromDate/toDate**。不传日期时接口只回 20 余条"最新"，
+    财报类会被挤出窗口（实测 t1code=40000 无日期 → 0 条；给 5 年区间 → 14 条）。
+
+    Returns: [{'year','title','pdf_url','date'}]（按年份倒序）
+    """
+    import requests
+    sid = _hkex_stock_id(stock_code)
+    if not sid:
+        print(f"  [HKEX] 未解析到 stockId（{stock_code}）")
+        return []
+    now_year = datetime.now().year
+    params = {
+        'sortDir': '0', 'sortByOptions': 'DateTime', 'category': '0', 'market': 'SEHK',
+        'stockId': sid, 'documentType': '-1',
+        'fromDate': f'{now_year - 6}0101', 'toDate': f'{now_year}1231',
+        'title': '', 'searchType': '0',
+        't1code': '40000',      # 财务报表 / ESG
+        't2Gcode': '-2', 't2code': '-2',
+        'rowRange': '100', 'lang': 'ZH',
+    }
+    try:
+        r = requests.get('https://www1.hkexnews.hk/search/titleSearchServlet.do',
+                         params=params,
+                         headers={'User-Agent': 'Mozilla/5.0',
+                                  'Referer': 'https://www1.hkexnews.hk/search/titlesearch.xhtml'},
+                         timeout=30)
+        raw = r.json().get('result')
+        data = json.loads(raw) if isinstance(raw, str) else (raw or [])
+    except Exception as e:
+        print(f"  [HKEX] 检索失败: {e}")
+        return []
+
+    reports = []
+    for d in data:
+        title = d.get('TITLE') or ''
+        if not ('年報' in title or '年度報告' in title):
+            continue
+        if any(k in title for k in ('摘要', '摘要報告', '英文')):
+            continue
+        link = d.get('FILE_LINK') or ''
+        if not link:
+            continue
+        if not link.startswith('http'):
+            link = 'https://www1.hkexnews.hk' + ('' if link.startswith('/') else '/') + link
+        ym = re.search(r'(20\d{2})', title)
+        reports.append({
+            'year': int(ym.group(1)) if ym else None,
+            'title': title,
+            'pdf_url': link,
+            'date': str(d.get('DATE_TIME') or '')[:10],
+        })
+    # 同年去重（取最新披露）
+    dedup = {}
+    for rp in reports:
+        y = rp.get('year')
+        if y not in dedup or str(rp.get('date', '')) > str(dedup[y].get('date', '')):
+            dedup[y] = rp
+    out = sorted(dedup.values(), key=lambda x: x.get('year') or 0, reverse=True)
+    return out[:years]
 
 
 def download_hkex_pdf(pdf_url, save_path, timeout=60):

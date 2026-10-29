@@ -5,6 +5,10 @@
 """
 import sys, json, requests, re, time, os
 from datetime import datetime
+try:    # 2026-10-19 审计：静默降级登记
+    from scripts.silenced_errors import record, record_result
+except ImportError:
+    from silenced_errors import record, record_result
 sys.stdout.reconfigure(encoding='utf-8')
 
 try:
@@ -120,13 +124,13 @@ def _fetch_hk_related(stock_code, data_dir):
     result = {'deals': [], 'count': 0}
     go_private = []
     try:
-        url = ("http://www.cninfo.com.cn/new/fulltextSearch/full"
+        url = ("https://www.cninfo.com.cn/new/fulltextSearch/full"
                f"?searchkey={stock_code}&sdate=&edate=&isfulltext=false"
                f"&sortName=pubdate&sortType=desc&plateCode=")
         r = requests.get(url, headers={
             'User-Agent': 'Mozilla/5.0',
             'Accept': 'application/json',
-            'Referer': 'http://www.cninfo.com.cn/'
+            'Referer': 'https://www.cninfo.com.cn/'
         }, timeout=15)
         r.encoding = 'utf-8'
         data = r.json()
@@ -159,13 +163,13 @@ def _fetch_hk_related(stock_code, data_dir):
     """港股：检查是否有私有化公告"""
     result = {}
     try:
-        url = ("http://www.cninfo.com.cn/new/fulltextSearch/full"
+        url = ("https://www.cninfo.com.cn/new/fulltextSearch/full"
                f"?searchkey={stock_code}&sdate=&edate=&isfulltext=false"
                f"&sortName=pubdate&sortType=desc&plateCode=")
         r = requests.get(url, headers={
             'User-Agent': 'Mozilla/5.0',
             'Accept': 'application/json',
-            'Referer': 'http://www.cninfo.com.cn/'
+            'Referer': 'https://www.cninfo.com.cn/'
         }, timeout=15)
         r.encoding = 'utf-8'
         data = r.json()
@@ -203,13 +207,13 @@ def _download_go_private_pdf(item, record, data_dir=None):
 
     # 构建PDF URL
     # adjunctUrl格式: finalpage/YYYY-MM-DD/announcementId.PDF
-    pdf_url = f"http://static.cninfo.com.cn/{adjunct}"
+    pdf_url = f"https://static.cninfo.com.cn/{adjunct}"
     dest = os.path.join(os.getcwd(), f"{aid}_go_private.pdf")
 
     try:
         r = requests.get(pdf_url, headers={
             'User-Agent': 'Mozilla/5.0',
-            'Referer': 'http://www.cninfo.com.cn/'
+            'Referer': 'https://www.cninfo.com.cn/'
         }, timeout=30)
         if r.status_code != 200 or len(r.content) < 5000:
             return
@@ -232,7 +236,8 @@ def _download_go_private_pdf(item, record, data_dir=None):
             record['deadline'] = _extract_deadline(text)
 
         _os.unlink(dest)  # 清理临时文件
-    except:
+    except Exception as _sexc:
+        record(__name__, '_download_go_private_pdf', _sexc, note='静默降级')
         pass
 
 
