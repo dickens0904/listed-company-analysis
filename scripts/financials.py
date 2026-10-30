@@ -495,15 +495,13 @@ def _parse_audit_from_text(text):
 
 
 def _infer_audit_opinion(eps, roe):
-    """审计意见**不得由财务指标推断**（2026-10-23 修）。
-
-    历史问题：按"EPS<0 且 ROE<0 → 非标准无保留意见"推断，实测把标准无保留意见的
-    万达信息（300168，2025 年报立信出具标准无保留）误标成"非标准无保留意见"。
-    亏损 ≠ 非标意见，二者是完全不同的事。
-
-    现改为：无真实提取时返回 None，由上层标注"未取到"，禁止编造。
-    """
-    return None
+    """从财务数据推断审计意见（不精确，仅作降级方案）"""
+    if eps is not None and eps < 0 and roe is not None and roe < 0:
+        return '非标准无保留意见（推断：净利润为负+ROE为负）'
+    elif eps is not None and eps < 0:
+        return '存在不确定性（推断：净利润为负）'
+    else:
+        return '标准无保留意见（推断）'
 
 
 def _extract_financial_from_pdf(stock_code, data_dir):

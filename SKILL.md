@@ -380,3 +380,129 @@ python scripts/silenced_errors.py       # 静默降级登记表自测
 ---
 
 > 审计/补强/bug 修复/一次性验证数据见 **`CHANGELOG.md`**；各数据源 CLI/Python 调用细节见 **`DATA_SOURCES.md`**；打包与 MCP 环境清单见 **`DEPENDENCIES.md`**。
+
+---
+
+## 🧩 泛化复用模板（对标"智数分析专家团"研究范式）
+
+本 skill 本质是**一套可迁移的上市公司深度研究引擎**，不绑定单一分析主题。换公司、换主题、换素材，研究管线（采集→语义量化→证据包→理论框架→撰写→门禁）原样不动，只改占位符。以下模板仿官网案例范式，把"换主题只是换镜头"制度化。
+
+### 泛化提示词模板（给 Agent 的总指令）
+```
+对 {公司名称}（股票代码：{股票代码}）在 {分析区间，如 2015–2025} 的 {数据来源，如历年年报}
+开展全面的 {分析主题，如数字化转型叙事分析}，生成一份 {交付形态，如咨询报告/评论文章}。
+
+## 分析维度
+{分析维度：文本语义量化(MD&A词频/LDA/叙事强度) + 财务指标 + 数字化投入；
+ 换主题可替换为：运营效率/销售结构/人力资源效能/财务质量/ESG}
+
+## 理论框架
+引入 {理论框架，如 MBA 战略与数字化转型相关理论} 作为分析骨架，理论与实践紧密结合。
+
+## 交付形态
+{形态A 通俗评论 2000–3500 字 | 形态B 咨询报告（指标卡+问题卡片+雷达图+附录）}
+
+## 技术规范
+- 采集走 MCP 优先数据源（wind-finance/dzh-mcp/qcc-company/alphapai）
+- MD&A 文本语义量化走 scripts/mda_semantic.py，中间计算落盘可复现
+- 所有结论须回查 evidence_pack，缺口维度禁编造
+- 跑 article_checklist.py 45+ 门禁，FAIL 未清零不得交付
+```
+
+### 主题模板库（只改 {分析维度} + {理论框架} 两处）
+| 主题 | 分析维度侧重 | 理论框架 |
+|---|---|---|
+| 数字化转型叙事 | MD&A 词频/LDA/叙事强度 + 研发强度 | 动态能力/RBV/数字化成熟度/平台战略与网络效应 |
+| ESG 表现 | 环保/社会/治理披露 + 碳排/员工结构 | 利益相关者理论/可持续发展理论 |
+| 运营效率 | 产能利用率/成本结构/供应链 | 精益生产/价值链分析 |
+| 销售与营销 | 渠道/客户结构/区域分布 | STP/4P/客户生命周期 |
+| 人力资源 | 员工结构/人均效能/激励 | 人力资本理论/激励理论 |
+| 财务质量 | 现金流/偿债/减值风险 | 盈余管理/信号理论 |
+
+🔴 **复用铁律**：换主题只改 `{分析维度}`+`{理论框架}`，采集层与证据包基座不动；换公司改 `{代码}`+`{区间}`；换素材改 `{数据来源}`（招股书/ESG 报告/业绩说明会纪要均可）。「所有中间计算以脚本保存」这条硬要求**务必保留**——它是可复查、可复算的关键。
+
+---
+
+## 📊 咨询报告模式（--format report）
+
+🔴 **双形态并存**：形态 A（现状，通俗评论文章 2000–3500 字）与形态 B（咨询报告，结构化+图表+理论框架+附录）面向不同场景——MBA/尽调/课程答辩用 B，快速观点输出用 A。撰写层按 `--format` 切换，**基座与门禁完全一致**。
+
+### 形态 B 结构（对标案例 HTML 咨询报告）
+1. 执行摘要 + 6 张核心指标卡（营收 CAGR/毛利率/研发强度/人均效能/叙事强度峰值/关键相关系数）
+2. 六理论框架整合（动态能力/RBV·VRIO/波特价值链/数字化成熟度/平台战略与网络效应/TAM），每框架附实证数据
+3. 核心问题卡片（严重程度 + 理论依据 + 实证数据）
+4. 战略举措与改善建议
+5. 图表：趋势图 / 对比柱状图 / 雷达图（数字化成熟度五维）/ 词频热力图（MD&A 关键词×年）
+6. 附录 A–D：缩略语表 / 数据来源 / 脚本说明 / 口径说明
+
+### 触发方式
+```bash
+# 形态 B 自动化生成（report_advisory.py，离线单文件 HTML，含上列 1–6 全部章节）：
+# 先跑三层产出 → article_brief 生成 evidence_pack → report_advisory 出报告
+python scripts/mda_semantic.py --corpus ./annual_pdfs --years 2019,2020,2021,2022,2023 \
+    --lexicon digital_transform.json --financial-json financials.json --output mda_semantic_out
+python scripts/theoretical_framework.py --financial-json financials.json \
+    --mda-out mda_semantic_out --company {公司名} --output theoretical_framework_out
+python scripts/article_brief.py <data_dir>          # 产出 evidence_pack.json
+python scripts/report_advisory.py <data_dir> --output consulting_report.html   # 形态 B 报告
+```
+🔴 形态 B 报告由 `report_advisory.py` 直接生成（执行摘要/指标卡/六理论整合+雷达图/问题卡片/战略建议/图表/附录 A–D），**内容全部来自落盘产物、不现算、不编造**；若需定制措辞，再交 Agent 在报告骨架上改写。雷达图/热力图/叙事轨迹为内联 SVG，双击离线可开。
+
+### 配色纪律（继承 joint_action_narrative）
+刻意不用任何品牌色（通用分析工具非某机构出品），中性低饱和学术色（`#3d5a80`/`#2f6b5f`/`#8a6520`）；雷达图/热力图数据来自 `mda_semantic_out/` 落盘文件，不现算。
+
+### 理论框架层（`theoretical_framework.py` ✅ 已落地）
+6 大 MBA 理论（动态能力 / RBV·VRIO / 波特价值链 / 数字化成熟度 / 平台战略与网络效应 / TAM）已做成「维度→指标→打分」映射，每个框架附实证数据锚定，产出 `theoretical_framework.json` + `theoretical_framework_integration.md`。可用维度 < 2 的框架整体标 `data_gap`，不硬套。运行见下方「文本语义量化」之后的独立章节与 `SKILL_CASE_FUSION_PLAN.md` 阶段三。
+
+---
+
+## 🆕 文本语义量化（mda_semantic.py）
+
+补足 skill 此前缺失的「MD&A 文本语义量化」：词频矩阵 / LDA 主题模型 / 叙事强度轨迹 / 叙事 vs 事实偏离检测（Pearson）。**基座已能抽取 MD&A 全文，本模块在其上做系统量化**，全部落盘供复算。详见 `SKILL_CASE_FUSION_PLAN.md`。
+
+```bash
+# 从年报 PDF 取 MD&A 并量化（年份与 PDF 顺序对齐）
+python scripts/mda_semantic.py 2020.pdf 2021.pdf 2022.pdf --years 2020,2021,2022
+# 目录批量
+python scripts/mda_semantic.py --corpus ./annual_pdfs --years 2019,2020,2021,2022,2023
+# 已抽取好的 {year: text}
+python scripts/mda_semantic.py --mdaa-json mdaa_by_year.json
+# 完整：自定义词典 + 财务年序列触发偏离检测
+python scripts/mda_semantic.py --corpus ./pdfs --years 2020,2021,2022 \
+    --lexicon digital_transform.json --financial-json financials.json --lda 4
+```
+
+🔴 **纪律**：jieba 缺失时自动正则 2-gram 降级（仅作线索，客户材料禁用降级结果）；sklearn 缺失时 `lda_topics.json` 显式标 `data_gap` 不伪装；偏离检测年数 < 3 或指标缺失标 `data_gap`，**缺口不得写成结论**。输出：`word_freq_matrix.csv` / `narrative_intensity.json` / `lda_topics.json` / `narrative_vs_fact.json` / `mda_semantic_report.md`。
+
+---
+
+## 🤝 专家团模式（orchestrate_expert_team.py）
+
+🔴 **单 Agent → 多角色编排**：面对「跨多年 / 理论重 / 咨询级交付」的复杂诉求，把撰写层拆成 **5 角色专家团**并行/串行编排（对标官网案例「智数分析专家团」）。本模式**不另搭 LLM API**——`orchestrate_expert_team.py` 只产出一份「角色分工 + 执行顺序 + 门禁」清单（manifest JSON + dispatch markdown），由**本会话 Agent** 按清单逐角色执行，全程复用下方既有脚本。基座（MCP 优先数据源）与门禁（45+ 项 `article_checklist.py`）与单 Agent 模式**完全一致**，仅在「人手分工」上升级。
+
+### 五角色与职责
+| 角色 | 职责 | 对应模块 |
+|---|---|---|
+| ① 首席数据编排师 | 把诉求翻译成采集-分析计划（定源优先级 / analyze 参数 / 输出目录 / 门禁） | `analyze.py`（规划） |
+| ② 知识检索专家 | 一手信源检索：公告全文 / 行业研报 / 同业 / 新闻监管，标注源层级 T1–T6 | `peer_discovery.py` / 网页搜索 / `business_fetch.py` |
+| ③ 数据科学工程师 | 跑通采集与三层量化，落盘全产物 + 证据包 | `analyze.py` + `mda_semantic.py` + `theoretical_framework.py` + `article_brief.py` |
+| ④ 洞察报告撰写师 | 基于证据包写最终交付物（形态 A / B） | 本会话 Agent 按证据包撰写 |
+| ⑤ 可视化分析设计师 | 据落盘数据出图表（雷达图/热力图/趋势图）回填形态 B | `visualization.py` / `chart_renderer.py` |
+
+### 触发方式
+```bash
+# 产出 5 角色派工清单（不跑分析，只规划分工；之后由 Agent 逐角色执行）
+python scripts/orchestrate_expert_team.py --company 某公司 --code 600000 \
+    --years 2019,2020,2021,2022,2023 --topic 数字化转型叙事分析 --format b
+# 产物：<output>/expert_team_manifest.json（结构化清单）+ expert_team_dispatch.md（可读派工板）
+```
+
+### 执行次序（Agent 按此逐角色推进）
+1. ① 编排师 → `data_plan`（源/参数/输出目录/门禁）
+2. ② 检索专家 → 一手信源清单（可与 ① 并行启动，并入需等 data_plan）
+3. ③ 数据工程师 → `analyze` + `mda_semantic` + `theoretical_framework` + `article_brief`，落盘全产物
+4. ④ 撰写师 → 按 `--format` 写 `article.md` / `report.md`
+5. ⑤ 可视化 → 出雷达图/热力图/趋势图，回填形态 B
+6. 收口 → `article_checklist.py` 全组（含 J 叙事解耦、K 理论框架），FAIL 未清零不得交付
+
+🔴 **角色纪律**：每角色只消费上游落盘产物、只产出自己的落盘产物，禁止跨角色凭印象补数；理论评级须有六维打分、叙事背离须有 pearson_r，缺口维度一律 `data_gap`，与单 Agent 模式同铁律。

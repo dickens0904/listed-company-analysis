@@ -1740,6 +1740,71 @@ def _narrative_skeleton(f: Dict, nb_meta: Dict, cap_count: int, motive_count: in
 # 主构建
 # ---------------------------------------------------------------------------
 
+def _load_narrative_vs_fact(data_dir: str) -> Dict[str, Any]:
+    """G2（2026-10-28）：读取 mda_semantic 产出的「叙事 vs 事实偏离检测」，并入证据包。
+
+    约定输入：<data_dir>/mda_semantic_out/narrative_vs_fact.json
+    （跑 mda_semantic.py 时用 --output <data_dir>/mda_semantic_out）。
+    缺失或解析失败 → 显式 data_gap，不静默、不编造（继承 SKILL.md 缺口纪律）。
+    """
+    cand = os.path.join(data_dir, 'mda_semantic_out', 'narrative_vs_fact.json')
+    if not os.path.exists(cand):
+        # 兼容：analyze 输出目录的同级 mda_semantic_out
+        cand2 = os.path.join(os.path.dirname(data_dir), 'mda_semantic_out',
+                             'narrative_vs_fact.json')
+        if os.path.exists(cand2):
+            cand = cand2
+        else:
+            return {'status': 'data_gap',
+                    'reason': 'mda_semantic_out/narrative_vs_fact.json 未找到',
+                    'action': '跑 scripts/mda_semantic.py --financial-json <财务年序列> '
+                              '--output <data_dir>/mda_semantic_out'}
+    try:
+        data = json.load(open(cand, encoding='utf-8'))
+    except Exception as e:
+        return {'status': 'data_gap', 'reason': f'parse_error:{e}'}
+    if data.get('status') != 'ok':
+        return {'status': 'data_gap', 'reason': data.get('reason', 'narrative_vs_fact 状态非 ok'),
+                'aligned_years': data.get('aligned_years', [])}
+    return {'status': 'ok', 'path': cand,
+            'aligned_years': data.get('aligned_years', []),
+            'metrics': data.get('metrics', {})}
+
+
+def _load_theoretical_framework(data_dir: str) -> Dict[str, Any]:
+    """G3（2026-10-28）：读取 theoretical_framework.py 产出的六维 MBA 理论打分，并入证据包。
+
+    约定输入：<data_dir>/theoretical_framework_out/theoretical_framework.json
+    （跑 theoretical_framework.py 时用 --output <data_dir>/theoretical_framework_out）。
+    缺失或解析失败 → 显式 data_gap，不静默、不编造（继承 SKILL.md 缺口纪律）。
+    """
+    cand = os.path.join(data_dir, 'theoretical_framework_out', 'theoretical_framework.json')
+    if not os.path.exists(cand):
+        cand2 = os.path.join(os.path.dirname(data_dir), 'theoretical_framework_out',
+                             'theoretical_framework.json')
+        if os.path.exists(cand2):
+            cand = cand2
+        else:
+            return {'status': 'data_gap',
+                    'reason': 'theoretical_framework_out/theoretical_framework.json 未找到',
+                    'action': '跑 scripts/theoretical_framework.py --financial-json <财务年序列> '
+                              '--output <data_dir>/theoretical_framework_out'}
+    try:
+        data = json.load(open(cand, encoding='utf-8'))
+    except Exception as e:
+        return {'status': 'data_gap', 'reason': f'parse_error:{e}'}
+    fws = data.get('frameworks') or []
+    scored = {fw.get('key'): fw.get('overall_score')
+              for fw in fws if fw.get('status') == 'ok' and fw.get('overall_score') is not None}
+    gaps = [fw.get('name_cn') for fw in fws if fw.get('status') != 'ok']
+    if not scored and gaps:
+        return {'status': 'data_gap', 'reason': '所有框架均 data_gap（可用维度<2）',
+                'gap_frameworks': gaps, 'path': cand}
+    return {'status': 'ok', 'path': cand,
+            'scored_frameworks': scored, 'gap_frameworks': gaps,
+            'company': data.get('company', '')}
+
+
 def build_evidence_pack(data_dir: str) -> Dict[str, Any]:
     r = _load(data_dir)
     f = r.get('findings') or {}
@@ -1782,6 +1847,8 @@ def build_evidence_pack(data_dir: str) -> Dict[str, Any]:
     known_gaps = _known_gaps(r, f)
     sector = _sector_exposure(data_dir, r, f)
     skeleton = _narrative_skeleton(f, nb_meta, len(ex_cap), len(ex_motive))
+    nvf = _load_narrative_vs_fact(data_dir)
+    tf = _load_theoretical_framework(data_dir)
 
     # 🔴 决策动因原文缺失 → 显式缺口（反向护栏：别让 LLM 凭财务反推"为什么卖"）
     if not ex_motive:
@@ -1831,6 +1898,8 @@ def build_evidence_pack(data_dir: str) -> Dict[str, Any]:
             'known_gaps': known_gaps,
             'sector_exposure': sector,
             'revenue_attribution': rev_attr,
+            'narrative_vs_fact': nvf,
+            'theoretical_framework': tf,
         },
     }
     return pack

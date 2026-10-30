@@ -619,6 +619,151 @@ def check_gap_guard(article_path: str, data_dir: str) -> List[Tuple[str, str, st
     return items
 
 
+def check_narrative_guard(article_path: str, data_dir: str) -> List[Tuple[str, str, str]]:
+    """J 组：叙事解耦守门（G2，2026-10-28 新增）
+
+    证据包 evidence.narrative_vs_fact 是「叙事 vs 事实偏离」的量化底座（mda_semantic 产出）。
+    Agent 撰写层若写「叙事与事实背离 / 解耦 / 韧性 / 脱节」，必须有对应 pearson_r 与
+    年序列支撑，否则等于凭印象编造（同 I 组禁编造逻辑，缺口不得写成结论）。
+    """
+    ep = os.path.join(data_dir, 'evidence_pack.json')
+    if not os.path.exists(ep):
+        return [('J0', WARN, '未找到 evidence_pack.json，叙事守门跳过；请先跑 article_brief.py')]
+    try:
+        pack = json.load(open(ep, encoding='utf-8'))
+    except Exception as e:
+        return [('J0', WARN, f'证据包解析失败：{e}')]
+    nvf = (pack.get('evidence') or {}).get('narrative_vs_fact') or {}
+    has_data = nvf.get('status') == 'ok' and bool(nvf.get('metrics'))
+
+    text = ''
+    if article_path and os.path.exists(article_path):
+        try:
+            text = open(article_path, encoding='utf-8').read()
+        except Exception:
+            text = ''
+    if not text:
+        if has_data:
+            return [('J0', PASS,
+                     f'证据包含叙事偏离检测（{len(nvf["metrics"])} 指标，'
+                     f'{nvf.get("aligned_years")} 年）')]
+        return [('J0', WARN,
+                 '未提供文章；若文章将写「叙事背离/解耦」，须先跑 mda_semantic 产出 narrative_vs_fact')]
+
+    # 强断言：背离/解耦/韧性/脱节/说一套做一套（须有 r 与年序列支撑）
+    STRONG = ['叙事与事实背离', '叙事背离', '叙事解耦', '叙事韧性', '叙事脱节',
+              '说一套做一套', '管理层叙事与事实背离']
+    strong_hit = [k for k in STRONG if k in text]
+    # 中性提及（只需 evidence 有数据底座，不强制强相关）
+    NEUTRAL = ['叙事强度', '管理层叙事', '战略叙事', '数字化转型叙事', '叙事与事实']
+    neutral_hit = [k for k in NEUTRAL if k in text]
+
+    items = []
+    if strong_hit:
+        if not has_data:
+            items.append(('J1', FAIL,
+                f'正文写「{strong_hit[0]}」等叙事断言，但证据包无 narrative_vs_fact 量化支撑'
+                f' → 违反禁编造：须先跑 mda_semantic.py 得 pearson_r 与年序列，否则删除该断言'))
+        else:
+            interp_ok = any(
+                ('解耦' in m.get('interpretation', '') or '逆向' in m.get('interpretation', '')
+                 or '强相关' in m.get('interpretation', '') or '弱相关' in m.get('interpretation', ''))
+                for m in nvf['metrics'].values())
+            r_values = {k: v.get('pearson_r') for k, v in nvf['metrics'].items()}
+            if interp_ok:
+                items.append(('J1', PASS,
+                    f'叙事断言有量化支撑：{strong_hit[0]}（r 值：{r_values}）'))
+            else:
+                items.append(('J1', WARN,
+                    f'叙事断言命中，但 evidence 的 interpretation 未给出"解耦/逆向/相关"判定'
+                    f'（r 值：{r_values}）→ 请核对 metric 是否真支撑该表述'))
+    elif neutral_hit:
+        if not has_data:
+            items.append(('J2', WARN,
+                f'正文提及「{neutral_hit[0]}」，但证据包无叙事偏离量化 → 提示：跑 mda_semantic 可补实证，'
+                f'或确认该表述仅为中性描述非结论'))
+        else:
+            items.append(('J2', PASS,
+                f'中性叙事提及，证据含量化底座（{len(nvf["metrics"])} 指标）'))
+    else:
+        items.append(('J0', PASS, '正文未涉及叙事偏离类断言，叙事守门通过'))
+    return items
+
+
+def check_theory_framework_guard(article_path: str, data_dir: str) -> List[Tuple[str, str, str]]:
+    """K 组：理论框架守门（G3，2026-10-28 新增）
+
+    证据包 evidence.theoretical_framework 是六维 MBA 理论打分（theoretical_framework.py 产出）。
+    Agent 撰写层若引用某理论并给出评级结论（强/弱/得分/显示）→ 须有对应框架 status=ok
+    的量化支撑；把 data_gap 框架当结论 = 违反禁编造；不引用则不罚。
+    """
+    ep = os.path.join(data_dir, 'evidence_pack.json')
+    if not os.path.exists(ep):
+        return [('K0', WARN, '未找到 evidence_pack.json，理论框架守门跳过；请先跑 article_brief.py')]
+    try:
+        pack = json.load(open(ep, encoding='utf-8'))
+    except Exception as e:
+        return [('K0', WARN, f'证据包解析失败：{e}')]
+    tf = (pack.get('evidence') or {}).get('theoretical_framework') or {}
+    has_data = tf.get('status') == 'ok' and bool(tf.get('scored_frameworks'))
+    scored = tf.get('scored_frameworks') or {}
+    gaps = tf.get('gap_frameworks') or []
+
+    text = ''
+    if article_path and os.path.exists(article_path):
+        try:
+            text = open(article_path, encoding='utf-8').read()
+        except Exception:
+            text = ''
+
+    FW = {
+        '动态能力': 'dynamic_capability', '动态能力理论': 'dynamic_capability',
+        'RBV': 'rbv_vrio', 'VRIO': 'rbv_vrio', 'VRIO 框架': 'rbv_vrio',
+        '价值链': 'porter_value_chain', '波特价值链': 'porter_value_chain',
+        '数字化成熟度': 'digital_maturity',
+        '平台战略': 'platform_network', '网络效应': 'platform_network',
+        'TAM': 'tam', '技术接受模型': 'tam',
+    }
+    RATING_WORDS = ['强', '弱', '中', '领先', '落后', '得分', '评分', '显示为',
+                    '表明', '凸显', '印证']
+
+    if not text:
+        if has_data:
+            return [('K0', PASS, f'证据包含理论框架打分（{len(scored)} 框架已评分，'
+                                f'data_gap：{gaps}）')]
+        return [('K0', WARN, '未提供文章；若文章将引用理论框架评级，须先跑 theoretical_framework.py')]
+
+    mentioned = {name: key for name, key in FW.items() if name in text}
+    if not mentioned:
+        return [('K0', PASS, '正文未引用理论框架，理论守门通过')]
+
+    strong_hit = [name for name in mentioned if any(w in text for w in RATING_WORDS)]
+    items = []
+    if strong_hit:
+        if not has_data:
+            items.append(('K1', FAIL,
+                f'正文引用「{strong_hit[0]}」等理论并给出评级，但证据包无 theoretical_framework 量化支撑'
+                f' → 违反禁编造：须先跑 theoretical_framework.py 得整体评分，否则删除评级断言'))
+        else:
+            bad = [name for name, key in mentioned.items() if key not in scored]
+            if bad:
+                items.append(('K1', FAIL,
+                    f'正文引用了 data_gap 框架「{bad[0]}」（证据未评出整体分）→ 不得把缺口当结论；'
+                    f'改引已评分框架（{list(scored.keys())}）或补外部源'))
+            else:
+                items.append(('K1', PASS,
+                    f'理论评级有量化支撑：{strong_hit[0]}（已评分框架：{list(scored.keys())}）'))
+    else:
+        if not has_data:
+            items.append(('K2', WARN,
+                f'正文提及「{list(mentioned.keys())[0]}」，但证据包无理论框架量化 → 提示：'
+                f'跑 theoretical_framework.py 可补实证，或确认仅为中性引用'))
+        else:
+            items.append(('K2', PASS, f'中性理论提及，证据含量化底座（{len(scored)} 框架）'))
+    return items
+
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('data_dir')
@@ -659,6 +804,10 @@ def main():
         groups.append(('H. 首次提及出处（行文顺序）', check_first_mention(a.article)))
     # I 组：缺口守门（证据包禁编造清单）
     groups.append(('I. 缺口守门（证据包禁编造清单）', check_gap_guard(a.article, a.data_dir)))
+    # J 组：叙事解耦守门（G2，2026-10-28 新增）—— 叙事背离/解耦断言须有 r 与年序列支撑
+    groups.append(('J. 叙事解耦守门（证据包叙事偏离）', check_narrative_guard(a.article, a.data_dir)))
+    # K 组：理论框架守门（G3，2026-10-28 新增）—— 理论评级断言须有六维打分支撑
+    groups.append(('K. 理论框架守门（证据包六维打分）', check_theory_framework_guard(a.article, a.data_dir)))
 
     total = dict(fail=0, warn=0, ok=0)
     print('=' * 76)
